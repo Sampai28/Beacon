@@ -240,28 +240,101 @@ what it already holds.
 
 ## Benchmark results
 
-**No benchmarks have been run yet.** This table is intentionally empty and will
-be filled from raw output committed under `bench/results/`.
-
-| Metric | Result |
-|---|---|
-| Peak concurrent connections | not yet measured |
-| Connection success rate | not yet measured |
-| Join latency p50 / p95 / p99 | not yet measured |
-| Sessions dropped on gateway kill | not yet measured |
-| Time until ring excludes dead node | not yet measured |
-| Time until drift returns to zero | not yet measured |
-| Joins served during failover | not yet measured |
-
-The load target is configurable and defaults to 10,000 connections. That target
-may not be reachable on a single Docker Desktop host — file-descriptor and
-ephemeral-port limits under WSL2 are the likely binding constraints. Whatever
-ceiling is found is what gets reported, with the limiting factor named. No
-number appears here that was not measured on this machine.
+Every number below was measured on this machine. Raw output is committed under
+[`bench/results/`](bench/results/) so each figure traces back to the run that
+produced it.
 
 **Test hardware:** AMD Ryzen 7 260 (8 cores / 16 threads), 31.3 GB RAM, Windows
 11, Docker Desktop 29.4.3 on the WSL2 backend with 16 CPUs and 15.3 GB allocated
-to the VM.
+to the VM. All six containers plus the k6 load generator share that budget.
+
+### Load — connection ceiling
+
+The default target of 10,000 was met, so the ramp continued upward until it
+broke. Each row is one k6 run: connections ramp, hold, then drain.
+
+| Connections | Connect success | Connect p99 | JOIN p95 | JOIN p99 | JOINs answered | Verdict |
+|---:|---:|---:|---:|---:|---:|---|
+| 10,000 | **100%** | 44 ms | 18 ms | **27 ms** | 100% (204,850) | clean |
+| 20,000 | **100%** | 59 ms | 18 ms | **38 ms** | 100% (469,215) | clean — all thresholds passed |
+| 30,000 | 100% | 227 ms | 195 ms | 1,323 ms | 100% (784,130) | degraded — latency threshold missed |
+| 40,000 | 100% | 4,429 ms | 4,498 ms | 4,894 ms | 97.2% (900,641 / 926,347) | broken — 43 socket errors |
+
+**20,000 concurrent WebSocket connections is the highest fully clean result**,
+holding 100% connection success and 100% of 469,215 cross-gateway JOINs answered
+at a p99 of 38 ms. Gateway-side counters confirm the client-side figure: at the
+10,000 run the three replicas reported 3,600 / 3,200 / 3,200 active connections.
+
+Every JOIN in these runs is a cross-node resolution. The load script pairs each
+client with a peer on a *different* gateway, so a local-lookup fast path would
+not be exercised.
+
+### The limiting factor is the reaper, not the host
+
+The obvious suspects were all ruled out by the gateways' own process metrics at
+peak:
+
+| Resource | Peak observed | Limit | Binding? |
+|---|---:|---:|---|
+| Open file descriptors | 13,673 | 1,048,576 | No — the Compose `ulimits` setting works |
+| Resident memory per gateway | 505 MB | ~15 GB available | No |
+| CPU per gateway | 1.55 cores | 16 cores | No |
+| Ephemeral ports | — | per-container namespace | No — k6 runs inside the Docker network |
+| **Reaper sweep p99** | **≥ 5 s** | 2 s sweep interval | **Yes** |
+
+The reaper issues one pipelined `HMGET` per session it owns. At 40,000 sessions
+that is roughly 13,000 commands in a single burst per gateway, which saturates
+the shared Redis connection pool and starves the `HGETALL` that a JOIN needs.
+JOIN latency degrades precisely as sweep duration crosses the sweep interval —
+at which point sweeps also begin to overlap and cleanup falls behind.
+
+This is a Beacon design limit rather than a host limit, and it is fixable:
+chunk the sweep across several intervals, or give the reaper its own Redis pool
+so a scan cannot contend with request traffic. Neither is done here, and the
+number reported is the number as built.
+
+### Chaos — killing a gateway under load
+
+`docker kill` on `gateway-2` with 6,000 connections established. SIGKILL, so
+there is no graceful deregistration: the ring has to notice via TTL expiry.
+
+| Measurement | Result |
+|---|---:|
+| Connections before the kill | 6,000 |
+| Sessions dropped by the kill | **1,920** (everything the victim held) |
+| Connections retained on survivors | 4,080 |
+| Drift first observed non-zero | T+6.60 s |
+| Peak drift | **−1,920** |
+| **Time until drift returned to zero** | **T+9.56 s** (≈3.0 s to reconcile) |
+| Time until the ring excluded the dead node | 9.54 s |
+| Orphaned sessions reclaimed | **1,920 — exactly the victim's count** |
+| JOINs served by survivors during the window | **4,241** |
+| Time for the restarted node to rejoin the ring | 1.73 s |
+
+Reading the sequence: the victim's registry key expires 6 s after the kill
+(`BEACON_NODE_TTL`), at which point its connections leave the in-memory total
+while its sessions remain in Redis — drift drops to −1,920. The surviving
+gateways rebuild the ring, take ownership of the orphaned shards, and reclaim
+them over the next few sweeps. The committed drift trace shows the reconciliation
+step by step: `−1920 → −1883 → −307 → 0`.
+
+The two numbers that matter most: **no session was lost or double-counted** —
+reclamation matched the victim's connection count exactly — and **survivors kept
+serving JOINs throughout**, 4,241 of them during the failure window.
+
+The dominant term in failover time is `BEACON_NODE_TTL`, set to 6 s (3× the
+registry heartbeat). Lowering it shortens failover directly, at the cost of
+evicting healthy gateways during a GC pause or a slow Redis round trip.
+
+### Reproducing
+
+```bash
+docker compose -f deploy/docker-compose.yml run --rm -e LOAD_VUS=20000 -e CONNS_PER_VU=40 k6 run /scripts/load.js
+```
+
+```bash
+bash bench/chaos.sh 6000 beacon-gateway-2
+```
 
 ## Design decisions
 
@@ -308,6 +381,34 @@ closes itself.
 Redis is authoritative, and any divergence between the two is treated as a
 defect to report via `beacon_presence_drift` rather than something to reconcile
 silently.
+
+## Known limitations
+
+**The reaper's sweep is unchunked**, and it is what caps throughput. One
+pipelined `HMGET` per owned session means a burst of ~13,000 Redis commands per
+gateway at 40,000 sessions, contending with the request path on the same
+connection pool. Measured: sweep p99 crosses the 2 s sweep interval somewhere
+between 20,000 and 30,000 connections, and JOIN p99 degrades with it. The fix is
+to chunk the scan across intervals or give the reaper a dedicated pool.
+
+**Redis is a single point of failure.** The whole design routes coordination
+through it. Losing Redis does not drop existing WebSocket connections — gateways
+report unready and keep serving what they hold — but no presence change
+propagates and no JOIN resolves.
+
+**Pub/sub is at-most-once.** A subscriber disconnected at the instant of a
+publish misses the event. Snapshot-on-subscribe and the drift reconciler
+compensate; nothing pretends delivery is guaranteed.
+
+**Failover time is dominated by a TTL.** 6 s of the ~9.5 s convergence measured
+above is `BEACON_NODE_TTL` elapsing. That is a tuning choice, not a discovered
+constant, and it trades failover speed against flapping healthy nodes.
+
+**`token` is not authentication.** It is a shared secret from an environment
+variable, present so the protocol has a rejection path to exercise.
+
+**One Redis, one region, no persistence.** Session state is deliberately
+ephemeral. Sharding Redis itself is out of scope.
 
 ## Repository layout
 
@@ -376,6 +477,39 @@ dropping the connection, and `beacon_presence_drift` read zero on every node.
 Every Grafana panel query was checked against live Prometheus data rather than
 assumed — measured JOIN p99 at that moment was 495 µs.
 
+### `bench` — measurement, and finding the actual ceiling
+
+The k6 script uses `k6/experimental/websockets` rather than the legacy blocking
+`k6/ws`, because one VU per connection would have meant 10,000 VUs and several
+GB of generator overhead — k6 would have run out of memory before Beacon ran out
+of capacity, and the resulting number would have described the load generator.
+Each simulated client is paired with a peer on a *different* gateway, so every
+JOIN measured is a cross-node resolution.
+
+The 10,000 target was met on the first run at 100% success, so the ramp
+continued until it broke: 20,000 clean, 30,000 latency-degraded, 40,000 broken.
+The interesting part is *why*. File descriptors, memory, CPU and ephemeral ports
+were all ruled out from the gateways' own process metrics — peak FD use was
+13,673 against a limit of 1,048,576. The binding constraint is Beacon's own
+reaper: an unchunked pipelined scan that saturates the Redis pool and starves
+the request path once sweep duration crosses the sweep interval.
+
+Two measurement bugs were worth more than they cost. The chaos script initially
+reported that drift never went non-zero — untrue; the drift gauge updated every
+5 s and the convergence loop's own nine-HTTP-calls-per-iteration gave it ~2 s
+resolution, so a ~3 s transient fell between samples. Tightening the gauge to 1 s
+and adding a dedicated 10 Hz single-metric sampler turned "did not converge" into
+a real timing. Separately, Git Bash's MSYS path conversion silently rewrote the
+container-side `/scripts/load.js` into `C:/Program Files/Git/scripts/load.js`, so
+k6 started, found nothing, and exited — reporting zero connections rather than an
+error.
+
+*Verified:* four load runs and one chaos run, raw output committed under
+`bench/results/`. Headline numbers: **20,000 concurrent connections at 100%
+success with cross-gateway JOIN p99 of 38 ms**; killing a gateway holding 1,920
+sessions reclaimed **exactly 1,920** orphans, returned drift to zero **3.0 s**
+after it diverged, and the survivors served **4,241 JOINs** during the failure.
+
 ### `ring` — the dependency-light core: ring, protocol codec, metrics
 
 Three packages that can be fully tested without Redis, a network, or a running
@@ -403,6 +537,35 @@ ring distribution across 3 nodes was **31.02 / 35.35 / 33.63%** (worst deviation
 the 6,967 keys it owned and moved no others; adding a fourth node moved 22.57% of
 keys, all of them to the new node. `Lookup` benchmarks at 197.8 ns/op and a full
 ring rebuild at 133 µs.
+
+## Resume bullets
+
+Every figure below comes from a run on the hardware named in
+[Benchmark results](#benchmark-results), with raw output in `bench/results/`.
+
+- Built a horizontally-sharded real-time presence service in Go (WebSocket,
+  Redis, custom consistent hash ring) sustaining **20,000 concurrent connections
+  across 3 gateway replicas at 100% connection success**, answering **469,215
+  cross-node session-join requests at p99 38 ms**.
+
+- Designed TTL-based node membership with a consistent hash ring assigning
+  stale-session cleanup to exactly one owner; under a `SIGKILL` of a live gateway
+  holding 1,920 sessions, surviving nodes **reclaimed exactly 1,920 orphaned
+  sessions with zero loss or double-count**, returned state drift to zero **3.0 s**
+  after divergence, and **served 4,241 join requests during the failure window**.
+
+- Implemented six self-auditing integrity checks (frame validation,
+  duplicate-session eviction, out-of-order rejection, stale reaping, orphan
+  detection, drift reconciliation), each exported to Prometheus and surfaced on
+  two provisioned Grafana dashboards; verified by **121 unit tests and 86
+  subtests, race-clean**, plus cross-node integration tests against a live
+  3-replica cluster.
+
+- Diagnosed the throughput ceiling from process metrics rather than assumption —
+  ruling out file descriptors (**13,673 used of 1,048,576**), memory, CPU and
+  ephemeral ports — and traced degradation past 20,000 connections to an
+  unchunked reaper scan whose **p99 sweep exceeded its 2 s interval**, starving
+  the request path on a shared Redis pool.
 
 ## License
 

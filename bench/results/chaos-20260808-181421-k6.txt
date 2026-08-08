@@ -1,0 +1,198 @@
+ Container beacon-redis-1 Running 
+ Container beacon-gateway-2 Running 
+ Container beacon-gateway-3 Running 
+ Container beacon-gateway-1 Running 
+ Container beacon-redis-1 Waiting 
+ Container beacon-redis-1 Waiting 
+ Container beacon-redis-1 Waiting 
+ Container beacon-redis-1 Healthy 
+ Container beacon-redis-1 Healthy 
+ Container beacon-redis-1 Healthy 
+ Container beacon-k6-chaos-20260808-181421 Creating 
+ Container beacon-k6-chaos-20260808-181421 Created 
+
+          /\      |‾‾| /‾‾/   /‾‾/   
+     /\  /  \     |  |/  /   /  /    
+    /  \/    \    |     (   /   ‾‾\  
+   /          \   |  |\  \ |  (‾)  | 
+  / __________ \  |__| \__\ \_____/ .io
+
+     execution: local
+        script: /scripts/load.js
+        output: -
+
+     scenarios: (100.00%) 1 scenario, 240 max VUs, 3m10s max duration (incl. graceful stop):
+              * presence: Up to 240 looping VUs for 3m0s over 3 stages (gracefulRampDown: 10s, gracefulStop: 15s)
+
+
+running (0m01.0s), 011/240 VUs, 0 complete and 0 interrupted iterations
+presence   [   1% ] 011/240 VUs  0m01.0s/3m00.0s
+
+running (0m02.0s), 023/240 VUs, 0 complete and 0 interrupted iterations
+presence   [   1% ] 023/240 VUs  0m02.0s/3m00.0s
+
+running (0m03.0s), 035/240 VUs, 0 complete and 0 interrupted iterations
+presence   [   2% ] 035/240 VUs  0m03.0s/3m00.0s
+
+running (0m04.0s), 047/240 VUs, 0 complete and 0 interrupted iterations
+presence   [   2% ] 047/240 VUs  0m04.0s/3m00.0s
+
+running (0m05.0s), 059/240 VUs, 0 complete and 0 interrupted iterations
+presence   [   3% ] 059/240 VUs  0m05.0s/3m00.0s
+
+running (0m06.0s), 071/240 VUs, 0 complete and 0 interrupted iterations
+presence   [   3% ] 071/240 VUs  0m06.0s/3m00.0s
+
+running (0m07.0s), 083/240 VUs, 0 complete and 0 interrupted iterations
+presence   [   4% ] 083/240 VUs  0m07.0s/3m00.0s
+
+running (0m08.0s), 095/240 VUs, 0 complete and 0 interrupted iterations
+presence   [   4% ] 095/240 VUs  0m08.0s/3m00.0s
+
+running (0m09.0s), 107/240 VUs, 0 complete and 0 interrupted iterations
+presence   [   5% ] 107/240 VUs  0m09.0s/3m00.0s
+
+running (0m10.0s), 119/240 VUs, 0 complete and 0 interrupted iterations
+presence   [   6% ] 119/240 VUs  0m10.0s/3m00.0s
+
+running (0m11.0s), 131/240 VUs, 0 complete and 0 interrupted iterations
+presence   [   6% ] 131/240 VUs  0m11.0s/3m00.0s
+
+running (0m12.0s), 143/240 VUs, 0 complete and 0 interrupted iterations
+presence   [   7% ] 143/240 VUs  0m12.0s/3m00.0s
+
+running (0m13.0s), 155/240 VUs, 0 complete and 0 interrupted iterations
+presence   [   7% ] 155/240 VUs  0m13.0s/3m00.0s
+
+running (0m14.0s), 167/240 VUs, 0 complete and 0 interrupted iterations
+presence   [   8% ] 167/240 VUs  0m14.0s/3m00.0s
+
+running (0m15.0s), 179/240 VUs, 0 complete and 0 interrupted iterations
+presence   [   8% ] 179/240 VUs  0m15.0s/3m00.0s
+
+running (0m16.0s), 191/240 VUs, 0 complete and 0 interrupted iterations
+presence   [   9% ] 191/240 VUs  0m16.0s/3m00.0s
+
+running (0m17.0s), 203/240 VUs, 0 complete and 0 interrupted iterations
+presence   [   9% ] 203/240 VUs  0m17.0s/3m00.0s
+
+running (0m18.0s), 215/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  10% ] 215/240 VUs  0m18.0s/3m00.0s
+
+running (0m19.0s), 227/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  11% ] 227/240 VUs  0m19.0s/3m00.0s
+
+running (0m20.0s), 239/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  11% ] 239/240 VUs  0m20.0s/3m00.0s
+
+running (0m21.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  12% ] 240/240 VUs  0m21.0s/3m00.0s
+
+running (0m22.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  12% ] 240/240 VUs  0m22.0s/3m00.0s
+
+running (0m23.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  13% ] 240/240 VUs  0m23.0s/3m00.0s
+
+running (0m24.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  13% ] 240/240 VUs  0m24.0s/3m00.0s
+
+running (0m25.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  14% ] 240/240 VUs  0m25.0s/3m00.0s
+
+running (0m26.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  14% ] 240/240 VUs  0m26.0s/3m00.0s
+
+running (0m27.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  15% ] 240/240 VUs  0m27.0s/3m00.0s
+
+running (0m28.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  16% ] 240/240 VUs  0m28.0s/3m00.0s
+
+running (0m29.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  16% ] 240/240 VUs  0m29.0s/3m00.0s
+
+running (0m30.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  17% ] 240/240 VUs  0m30.0s/3m00.0s
+
+running (0m31.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  17% ] 240/240 VUs  0m31.0s/3m00.0s
+
+running (0m32.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  18% ] 240/240 VUs  0m32.0s/3m00.0s
+
+running (0m33.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  18% ] 240/240 VUs  0m33.0s/3m00.0s
+
+running (0m34.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  19% ] 240/240 VUs  0m34.0s/3m00.0s
+
+running (0m35.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  19% ] 240/240 VUs  0m35.0s/3m00.0s
+
+running (0m36.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  20% ] 240/240 VUs  0m36.0s/3m00.0s
+
+running (0m37.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  21% ] 240/240 VUs  0m37.0s/3m00.0s
+
+running (0m38.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  21% ] 240/240 VUs  0m38.0s/3m00.0s
+
+running (0m39.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  22% ] 240/240 VUs  0m39.0s/3m00.0s
+
+running (0m40.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  22% ] 240/240 VUs  0m40.0s/3m00.0s
+
+running (0m41.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  23% ] 240/240 VUs  0m41.0s/3m00.0s
+
+running (0m42.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  23% ] 240/240 VUs  0m42.0s/3m00.0s
+
+running (0m43.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  24% ] 240/240 VUs  0m43.0s/3m00.0s
+
+running (0m44.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  24% ] 240/240 VUs  0m44.0s/3m00.0s
+
+running (0m45.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  25% ] 240/240 VUs  0m45.0s/3m00.0s
+
+running (0m46.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  26% ] 240/240 VUs  0m46.0s/3m00.0s
+
+running (0m47.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  26% ] 240/240 VUs  0m47.0s/3m00.0s
+
+running (0m48.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  27% ] 240/240 VUs  0m48.0s/3m00.0s
+
+running (0m49.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  27% ] 240/240 VUs  0m49.0s/3m00.0s
+
+running (0m50.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  28% ] 240/240 VUs  0m50.0s/3m00.0s
+
+running (0m51.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  28% ] 240/240 VUs  0m51.0s/3m00.0s
+
+running (0m52.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  29% ] 240/240 VUs  0m52.0s/3m00.0s
+
+running (0m53.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  29% ] 240/240 VUs  0m53.0s/3m00.0s
+
+running (0m54.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  30% ] 240/240 VUs  0m54.0s/3m00.0s
+
+running (0m55.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  31% ] 240/240 VUs  0m55.0s/3m00.0s
+
+running (0m56.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  31% ] 240/240 VUs  0m56.0s/3m00.0s
+
+running (0m57.0s), 240/240 VUs, 0 complete and 0 interrupted iterations
+presence   [  32% ] 240/240 VUs  0m57.0s/3m00.0s
+

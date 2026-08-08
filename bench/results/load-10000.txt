@@ -1,0 +1,26 @@
+==============================================================================
+Beacon load test
+==============================================================================
+target connections   10000
+conns per VU         25
+VUs                  400
+gateways             gateway-1:8080, gateway-2:8080, gateway-3:8080
+ramp / hold          60s / 60s
+
+--- connections ---
+connect success            100.00%  (10000 ok / 10000 total)
+connect latency            min=3.00ms med=9.00ms avg=10.66ms p95=25.00ms p99=44.00ms max=87.00ms
+ws errors                  no data
+duplicate evictions        no data
+
+--- joins (cross-gateway) ---
+join answered OK           100.00%  (204850 ok / 204850 total)
+join latency               min=0.00ms med=2.00ms avg=4.81ms p95=18.00ms p99=27.00ms max=75.00ms
+
+--- traffic ---
+frames sent                425975
+presence received          83584
+
+--- thresholds ---
+all thresholds passed
+==============================================================================

@@ -24,7 +24,12 @@ x-gateway-common: &gateway-common
     BEACON_NODE_TTL: "6s"
     BEACON_REGISTRY_INTERVAL: "2s"
     BEACON_REAPER_INTERVAL: "2s"
-    BEACON_DRIFT_INTERVAL: "5s"
+    # 1s rather than 5s: after a gateway is killed, drift goes non-zero and back
+    # to zero inside a couple of seconds, and a 5s sampling period misses the
+    # transient entirely — the chaos measurement then cannot say how long
+    # convergence took. The check is two cheap Redis reads, so the resolution is
+    # nearly free.
+    BEACON_DRIFT_INTERVAL: "1s"
   # The default soft limit of 1024 descriptors caps a gateway at roughly a
   # thousand sockets — well below the load target, and it fails as opaque
   # "too many open files" errors rather than as a clear ceiling.

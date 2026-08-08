@@ -1,0 +1,483 @@
+{
+  "uid": "beacon-overview",
+  "title": "Beacon Overview",
+  "description": "Connections, presence throughput, join latency and ring membership across all gateway replicas.",
+  "tags": ["beacon"],
+  "timezone": "browser",
+  "editable": false,
+  "schemaVersion": 39,
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": { "text": "Prometheus", "value": "beacon-prometheus" },
+        "hide": 2
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Cluster",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "Connections (cluster)",
+      "description": "Sum of live WebSocket connections across every gateway.",
+      "datasource": { "type": "prometheus", "uid": "beacon-prometheus" },
+      "gridPos": { "h": 5, "w": 5, "x": 0, "y": 1 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(beacon_connections_active)",
+          "legendFormat": "connections"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "fixed", "fixedColor": "blue" }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Ring members",
+      "description": "Live gateways on the consistent hash ring. Should equal the replica count; a drop means a node stopped heartbeating.",
+      "datasource": { "type": "prometheus", "uid": "beacon-prometheus" },
+      "gridPos": { "h": 5, "w": 5, "x": 5, "y": 1 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(beacon_ring_members)",
+          "legendFormat": "members"
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 2 },
+              { "color": "green", "value": 3 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Presence events/sec",
+      "description": "Rate of presence transitions applied across the cluster.",
+      "datasource": { "type": "prometheus", "uid": "beacon-prometheus" },
+      "gridPos": { "h": 5, "w": 5, "x": 10, "y": 1 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(beacon_presence_events_total[30s]))",
+          "legendFormat": "events/s"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "decimals": 1, "color": { "mode": "fixed", "fixedColor": "purple" } },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Join p99",
+      "description": "99th percentile JOIN resolution latency across the cluster.",
+      "datasource": { "type": "prometheus", "uid": "beacon-prometheus" },
+      "gridPos": { "h": 5, "w": 4, "x": 15, "y": 1 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.99, sum(rate(beacon_join_duration_seconds_bucket[1m])) by (le))",
+          "legendFormat": "p99"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": { "unit": "s", "decimals": 4, "color": { "mode": "fixed", "fixedColor": "yellow" } },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Presence drift",
+      "description": "In-memory connection total minus Redis session cardinality. Must be zero in steady state. Full detail on the Beacon Integrity dashboard.",
+      "datasource": { "type": "prometheus", "uid": "beacon-prometheus" },
+      "gridPos": { "h": 5, "w": 5, "x": 19, "y": 1 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(beacon_presence_drift)",
+          "legendFormat": "drift"
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "red", "value": 10 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "title": "Connections",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 6 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Connections per gateway",
+      "description": "Live WebSocket connections held by each replica. A line dropping to zero is that gateway dying; the others should absorb the reconnects.",
+      "datasource": { "type": "prometheus", "uid": "beacon-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 7 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "beacon_connections_active",
+          "legendFormat": "{{gateway_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "mode": "none", "group": "A" }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Connection churn",
+      "description": "Accept rate against close rate by reason. A spike in evicted_duplicate is the duplicate-session policy firing; reaped means sessions timed out.",
+      "datasource": { "type": "prometheus", "uid": "beacon-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 7 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(beacon_connections_total[30s]))",
+          "legendFormat": "accepted/s"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(beacon_connections_closed_total[30s])) by (reason)",
+          "legendFormat": "closed: {{reason}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Presence and joins",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 15 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Presence events/sec by status",
+      "description": "Transitions applied, split by the status they moved to.",
+      "datasource": { "type": "prometheus", "uid": "beacon-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(beacon_presence_events_total[30s])) by (status)",
+          "legendFormat": "{{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "showPoints": "never",
+            "stacking": { "mode": "normal", "group": "A" }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Cross-node fan-out/sec",
+      "description": "Presence events delivered to subscribed clients. This is the number that proves fan-out is crossing gateways rather than staying local.",
+      "datasource": { "type": "prometheus", "uid": "beacon-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 16 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(beacon_presence_fanout_total[30s])",
+          "legendFormat": "{{gateway_id}}"
+        },
+        {
+          "refId": "B",
+          "expr": "beacon_subscriptions_active",
+          "legendFormat": "subscriptions: {{gateway_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": "subscriptions.*" },
+            "properties": [
+              { "id": "custom.axisPlacement", "value": "right" },
+              { "id": "unit", "value": "short" },
+              { "id": "custom.fillOpacity", "value": 0 },
+              { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [8, 4] } }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "JOIN outcomes/sec",
+      "description": "Joins by result. Denials are normal — a target who is online but not in a game cannot be joined.",
+      "datasource": { "type": "prometheus", "uid": "beacon-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 16 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(beacon_joins_total[30s])) by (result)",
+          "legendFormat": "{{result}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 20, "showPoints": "never", "stacking": { "mode": "normal", "group": "A" } }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "error" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "ok" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "JOIN latency percentiles",
+      "description": "p50 / p95 / p99 of end-to-end JOIN resolution. The whole point of the shared session store is that this stays flat whether the target is local or on another node.",
+      "datasource": { "type": "prometheus", "uid": "beacon-prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 24 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum(rate(beacon_join_duration_seconds_bucket[1m])) by (le))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum(rate(beacon_join_duration_seconds_bucket[1m])) by (le))",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum(rate(beacon_join_duration_seconds_bucket[1m])) by (le))",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 4,
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 0, "showPoints": "never" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "p99" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "p95" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "p50" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Ring membership and shard ownership",
+      "description": "Ring size against how many sessions each gateway owns for reaping. After a node dies, the survivors' owned counts should rise to cover the gap.",
+      "datasource": { "type": "prometheus", "uid": "beacon-prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 24 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(beacon_ring_members)",
+          "legendFormat": "ring members"
+        },
+        {
+          "refId": "B",
+          "expr": "beacon_reaper_owned_sessions",
+          "legendFormat": "owned: {{gateway_id}}"
+        },
+        {
+          "refId": "C",
+          "expr": "sum(increase(beacon_ring_rebuilds_total[1m]))",
+          "legendFormat": "rebuilds (1m)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 8, "showPoints": "never" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "ring members" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } },
+              { "id": "custom.lineWidth", "value": 3 }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Frame throughput",
+      "description": "Frames read from and written to clients, cluster-wide.",
+      "datasource": { "type": "prometheus", "uid": "beacon-prometheus" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 33 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(beacon_frames_received_total[30s]))",
+          "legendFormat": "received/s"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(beacon_frames_sent_total[30s]))",
+          "legendFormat": "sent/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    }
+  ]
+}

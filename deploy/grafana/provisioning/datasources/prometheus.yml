@@ -1,0 +1,19 @@
+# Datasource provisioned as code so the stack comes up with working dashboards
+# and no manual clicking.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: beacon-prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      # Must match the scrape interval in prometheus.yml, or Grafana rounds
+      # rate() windows up and smooths away the failover transitions the
+      # dashboards exist to show.
+      timeInterval: "1s"
+      httpMethod: POST

@@ -28,6 +28,10 @@ test:
 test-race:
 	go test -race $(PKG)
 
+## integration: cross-node tests against a running stack (needs `make up` first)
+integration:
+	go test -tags=integration -count=1 -v ./test/...
+
 ## vet: run go vet across the module
 vet:
 	go vet $(PKG)
@@ -71,4 +75,4 @@ chaos:
 clean:
 	rm -rf bin/
 
-.PHONY: help build test test-race vet fmt tidy check up down logs ps load chaos clean
+.PHONY: help build test test-race integration vet fmt tidy check up down logs ps load chaos clean

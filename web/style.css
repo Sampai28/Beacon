@@ -1,0 +1,138 @@
+:root {
+  --bg: #0f1116;
+  --panel: #171a21;
+  --panel-alt: #1e222b;
+  --border: #2a2f3a;
+  --text: #e5e9f0;
+  --muted: #8b93a7;
+  --accent: #5aa9ff;
+  --ok: #4ade80;
+  --warn: #fbbf24;
+  --bad: #f87171;
+  --game: #c084fc;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 24px;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+header { max-width: 1100px; margin: 0 auto 20px; }
+h1 { margin: 0 0 4px; font-size: 24px; letter-spacing: -0.02em; }
+h2 { margin: 0 0 14px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.sub { margin: 0; color: var(--muted); max-width: 70ch; }
+
+main {
+  max-width: 1100px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+}
+.panel.wide { grid-column: 1 / -1; }
+
+.row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.row.actions { margin-top: 14px; margin-bottom: 0; }
+label { width: 76px; flex-shrink: 0; color: var(--muted); font-size: 13px; }
+
+input, select {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 7px 10px;
+  font: inherit;
+}
+input:focus, select:focus { outline: none; border-color: var(--accent); }
+
+button {
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 7px 14px;
+  font: inherit;
+  cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #04121f; font-weight: 600; }
+button.ghost { background: none; }
+
+.status {
+  margin-top: 14px;
+  padding: 9px 12px;
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+  border: 1px solid var(--border);
+}
+.status.idle { color: var(--muted); }
+.status.live { color: var(--ok); border-color: rgba(74, 222, 128, 0.4); }
+.status.error { color: var(--bad); border-color: rgba(248, 113, 113, 0.4); }
+
+.hint { color: var(--muted); font-size: 12px; margin: 12px 0 0; }
+code { font-family: var(--mono); background: var(--bg); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+
+.watched { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+.watched .empty { color: var(--muted); font-size: 13px; margin: 0; }
+
+.friend {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 12px;
+}
+.friend .name { font-weight: 600; flex: 1; }
+.friend .pill {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
+.pill.ONLINE  { color: var(--ok); }
+.pill.IN_GAME { color: var(--game); }
+.pill.AWAY    { color: var(--warn); }
+.pill.OFFLINE { color: var(--muted); }
+.friend .where { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+.log {
+  margin-top: 12px;
+  max-height: 320px;
+  overflow-y: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+}
+.entry { display: flex; gap: 10px; padding: 3px 0; border-bottom: 1px solid rgba(42, 47, 58, 0.5); }
+.entry:last-child { border-bottom: none; }
+.entry .time { color: var(--muted); flex-shrink: 0; }
+.entry .dir { flex-shrink: 0; width: 22px; }
+.entry.out .dir { color: var(--accent); }
+.entry.in  .dir { color: var(--ok); }
+.entry.err .dir, .entry.err .body { color: var(--bad); }
+.entry .body { word-break: break-all; }
+
+.counter { color: var(--muted); font-size: 12px; margin-left: auto; }

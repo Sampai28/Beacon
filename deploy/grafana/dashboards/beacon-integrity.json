@@ -1,0 +1,460 @@
+{
+  "uid": "beacon-integrity",
+  "title": "Beacon Integrity",
+  "description": "Every self-defence check Beacon runs, plus presence drift. Non-zero here is the service catching itself misbehaving — which is the point, not a failure of the dashboard.",
+  "tags": ["beacon", "integrity"],
+  "timezone": "browser",
+  "editable": false,
+  "schemaVersion": 39,
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": { "text": "Prometheus", "value": "beacon-prometheus" },
+        "hide": 2
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Check 6 — drift reconciliation",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "beacon_presence_drift",
+      "description": "In-memory connection total minus Redis session cardinality. Zero in steady state. Positive: gateways believe in connections Redis has no record of. Negative: Redis holds sessions no gateway is serving.",
+      "datasource": { "type": "prometheus", "uid": "beacon-prometheus" },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 1 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(beacon_presence_drift)",
+          "legendFormat": "drift"
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [
+            {
+              "type": "value",
+              "options": { "0": { "text": "0 — clean", "color": "green", "index": 0 } }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 0 },
+              { "color": "orange", "value": 1 },
+              { "color": "red", "value": 10 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Drift over time, with both sides",
+      "description": "The two inputs plotted against their difference. When drift is non-zero, this shows which side moved — the whole reason drift is reported signed rather than absolute.",
+      "datasource": { "type": "prometheus", "uid": "beacon-prometheus" },
+      "gridPos": { "h": 6, "w": 18, "x": 6, "y": 1 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(beacon_presence_drift)",
+          "legendFormat": "drift"
+        },
+        {
+          "refId": "B",
+          "expr": "max(beacon_connections_clusterwide)",
+          "legendFormat": "in-memory (gateways)"
+        },
+        {
+          "refId": "C",
+          "expr": "max(beacon_sessions_in_redis)",
+          "legendFormat": "in Redis"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "drift" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } },
+              { "id": "custom.lineWidth", "value": 3 },
+              { "id": "custom.fillOpacity", "value": 15 }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max", "min"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Checks 1–5 — totals",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 7 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "1 · Frames rejected",
+      "description": "Malformed JSON, unknown types, missing fields and oversized payloads. Non-zero under load means a client is misbehaving, not that the gateway is.",
+      "datasource": { "type": "prometheus", "uid": "beacon-prometheus" },
+      "gridPos": { "h": 5, "w": 5, "x": 0, "y": 8 },
+      "targets": [
+        { "refId": "A", "expr": "sum(beacon_frames_rejected_total)", "legendFormat": "rejected" }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "orange" } },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "2 · Duplicate sessions evicted",
+      "description": "Users who connected while already connected elsewhere. The newer connection wins and the older is dropped.",
+      "datasource": { "type": "prometheus", "uid": "beacon-prometheus" },
+      "gridPos": { "h": 5, "w": 5, "x": 5, "y": 8 },
+      "targets": [
+        { "refId": "A", "expr": "sum(beacon_duplicate_sessions_evicted_total)", "legendFormat": "evicted" }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "purple" } },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "3 · Out-of-order dropped",
+      "description": "Presence events carrying a timestamp older than stored lastSeen. Dropped rather than applied, so stale state cannot overwrite fresh.",
+      "datasource": { "type": "prometheus", "uid": "beacon-prometheus" },
+      "gridPos": { "h": 5, "w": 5, "x": 10, "y": 8 },
+      "targets": [
+        { "refId": "A", "expr": "sum(beacon_presence_events_out_of_order_total)", "legendFormat": "dropped" }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "yellow" } },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "4 · Sessions reaped",
+      "description": "Sessions whose heartbeat TTL lapsed, removed by the ring-designated owner of that shard.",
+      "datasource": { "type": "prometheus", "uid": "beacon-prometheus" },
+      "gridPos": { "h": 5, "w": 5, "x": 15, "y": 8 },
+      "targets": [
+        { "refId": "A", "expr": "sum(beacon_sessions_reaped_total)", "legendFormat": "reaped" }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "blue" } },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "5 · Orphans reclaimed",
+      "description": "Sessions whose owning gateway vanished from the registry. This is the counter that moves when a gateway is killed.",
+      "datasource": { "type": "prometheus", "uid": "beacon-prometheus" },
+      "gridPos": { "h": 5, "w": 4, "x": 20, "y": 8 },
+      "targets": [
+        { "refId": "A", "expr": "sum(beacon_orphan_sessions_reclaimed_total)", "legendFormat": "reclaimed" }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "red" } },
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "title": "Check 1 — frame validation",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Rejection rate by reason",
+      "description": "Every rejection path the codec has, split out. All series are pre-seeded at zero so a quiet check is visibly zero rather than absent.",
+      "datasource": { "type": "prometheus", "uid": "beacon-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(beacon_frames_rejected_total[30s])) by (reason)",
+          "legendFormat": "{{reason}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 20, "showPoints": "never", "stacking": { "mode": "normal", "group": "A" } }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Rejections as a share of inbound frames",
+      "description": "Rejection rate normalised by traffic. A rising ratio under constant load is more interesting than a rising count.",
+      "datasource": { "type": "prometheus", "uid": "beacon-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(beacon_frames_rejected_total[1m])) / clamp_min(sum(rate(beacon_frames_received_total[1m])), 1)",
+          "legendFormat": "rejected / received"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 3,
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "single" }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Checks 2, 3, 5 — state integrity",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Integrity events/sec",
+      "description": "Duplicate evictions, out-of-order drops and orphan reclamations side by side. Correlating a spike across all three is the signature of a gateway failure.",
+      "datasource": { "type": "prometheus", "uid": "beacon-prometheus" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 23 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(beacon_duplicate_sessions_evicted_total[30s]))",
+          "legendFormat": "2 · duplicate evictions/s"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(beacon_presence_events_out_of_order_total[30s]))",
+          "legendFormat": "3 · out-of-order drops/s"
+        },
+        {
+          "refId": "C",
+          "expr": "sum(rate(beacon_orphan_sessions_reclaimed_total[30s]))",
+          "legendFormat": "5 · orphans reclaimed/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 12, "showPoints": "never" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": ".*orphans.*" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Check 4 — reaper",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Reaper activity",
+      "description": "Sweep rate against sessions reaped. Each shard is swept by exactly one gateway, which is the entire reason the ring exists.",
+      "datasource": { "type": "prometheus", "uid": "beacon-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(beacon_reaper_runs_total[30s]))",
+          "legendFormat": "sweeps/s"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(beacon_sessions_reaped_total[30s]))",
+          "legendFormat": "sessions reaped/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Reaper sweep duration p95",
+      "description": "How long a sweep takes. If this approaches the reaper interval, sweeps are overlapping and cleanup is falling behind.",
+      "datasource": { "type": "prometheus", "uid": "beacon-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum(rate(beacon_reaper_duration_seconds_bucket[1m])) by (le, gateway_id))",
+          "legendFormat": "p95 {{gateway_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 4,
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 0, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Dependencies",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 40 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Redis and pub/sub errors",
+      "description": "Failures reaching the shared store. Sustained registry failures mean a node is about to fall off the ring while still serving traffic.",
+      "datasource": { "type": "prometheus", "uid": "beacon-prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 41 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(beacon_redis_errors_total[30s])) by (op)",
+          "legendFormat": "redis: {{op}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(beacon_pubsub_errors_total[30s]))",
+          "legendFormat": "pubsub"
+        },
+        {
+          "refId": "C",
+          "expr": "sum(rate(beacon_registry_failures_total[30s]))",
+          "legendFormat": "registry heartbeat failures"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "showPoints": "never" },
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Registry heartbeats",
+      "description": "Each gateway announcing itself. A flat line at zero for one gateway_id is that node dying — the same signal the ring uses.",
+      "datasource": { "type": "prometheus", "uid": "beacon-prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 41 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(beacon_registry_heartbeats_total[30s])",
+          "legendFormat": "{{gateway_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never", "spanNulls": false }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    }
+  ]
+}

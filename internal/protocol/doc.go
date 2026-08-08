@@ -7,5 +7,8 @@
 // must never panic on any byte sequence. Each rejection path increments a
 // dedicated metric so bad input is visible rather than silent.
 //
-// Implemented in step 3.
+// Validation is two-stage. Decode checks the envelope — size, encoding, JSON
+// well-formedness, and whether the type is one clients may send. The per-type
+// decoders then check the payload. Splitting them means an unknown type costs
+// one small unmarshal rather than a speculative decode into every shape.
 package protocol

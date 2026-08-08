@@ -142,7 +142,7 @@ absorbing them silently. Six checks, each with a dedicated Prometheus collector:
 
 ### Prerequisites
 
-- Go 1.22+
+- Go 1.25+ (set by `prometheus/client_golang`; see the build log)
 - Docker Desktop with Compose v2+ (WSL2 backend on Windows)
 - GNU Make and `jq` for the bench targets
 
@@ -166,7 +166,7 @@ The race detector needs cgo, which a stock Windows Go install lacks. Run it in a
 container instead:
 
 ```bash
-docker run --rm -v "$PWD:/src" -w /src -e CGO_ENABLED=1 golang:1.22 go test -race ./...
+docker run --rm -v "$PWD:/src" -w /src -e CGO_ENABLED=1 golang:1.25 go test -race ./...
 ```
 
 ### Run a single gateway
@@ -294,11 +294,39 @@ tree with each package's responsibility as a doc comment, a `Makefile`, and a
 gateway that is a real process — env-driven config, structured `slog` output,
 graceful SIGTERM drain, and split liveness/readiness probes. Two
 Windows-specific calls came out of it: `.gitattributes` forces LF so shell
-scripts survive Linux containers, and `-race` runs inside `golang:1.22` since
-cgo is unavailable natively.
+scripts survive Linux containers, and `-race` runs inside a `golang` container
+since cgo is unavailable natively.
 
 *Verified:* `go build`, `go vet`, `gofmt` clean, `go test ./...` (5 pass),
-race-clean in `golang:1.22`, plus a runtime smoke test of the probes.
+race-clean in a container, plus a runtime smoke test of the probes.
+
+### `ring` — the dependency-light core: ring, protocol codec, metrics
+
+Three packages that can be fully tested without Redis, a network, or a running
+container, so their behaviour is pinned before anything distributed is built on
+top. The consistent hash ring places each gateway at 150 virtual positions and
+rebuilds wholesale on membership change, which makes assignment depend only on
+the member set and never on the order membership was learned — two gateways
+reading the same registry in different orders must agree, or a shard ends up
+with two owners or none. The protocol codec validates in two stages: `Decode`
+checks the envelope (8KB cap enforced before parsing, UTF-8, JSON
+well-formedness, and whether the type is one a client may send), then per-type
+decoders check payloads. Identifiers are shape-checked because they become
+Redis key fragments and pub/sub channel names. The metrics package declares all
+28 collectors centrally and pre-seeds known label values, so a check that has
+never fired shows as zero rather than "No data" — an empty Grafana panel
+otherwise looks identical to a misnamed metric.
+
+Adding `prometheus/client_golang` raised the module's Go directive from 1.22 to
+1.25; the prerequisite and the container tag above were updated to match.
+
+*Verified:* 56 tests, 74 subtests, all passing; race-clean under `golang:1.25`;
+`FuzzDecode` ran 390,827 executions with no crash. Measured on this machine:
+ring distribution across 3 nodes was **31.02 / 35.35 / 33.63%** (worst deviation
+6.93% from a fair share over 100,000 keys); removing a node reassigned **exactly**
+the 6,967 keys it owned and moved no others; adding a fourth node moved 22.57% of
+keys, all of them to the new node. `Lookup` benchmarks at 197.8 ns/op and a full
+ring rebuild at 133 µs.
 
 ## License
 

@@ -1,0 +1,71 @@
+==============================================================================
+Beacon chaos test — 2026-08-08 23:14:22Z
+==============================================================================
+victim              beacon-gateway-2 (gateway-2)
+target connections  6000
+
+all three gateways ready
+
+--- starting background load ---
+k6 container: beacon-k6-chaos-20260808-181421 (pid 7345)
+waiting for connections to plateau...
+  connections: 164
+  connections: 1012
+  connections: 1856
+  connections: 2747
+  connections: 3606
+  connections: 4481
+  connections: 5347
+  connections: 6000
+  connections: 6000
+  connections: 6000
+
+--- baseline ---
+connections (cluster)      6000
+connections on victim      1920
+presence drift             0
+ring members               gateway-1,gateway-2,gateway-3
+
+--- killing beacon-gateway-2 ---
+killed at T+0.00s (SIGKILL — no graceful deregister, so the ring must
+notice via TTL expiry rather than being told)
+
+--- convergence (polling every 0.2s) ---
+T+6.76s  drift went non-zero: -1920
+T+6.76s  orphan reclamation began
+T+9.54s  ring excludes gateway-2 on every survivor
+T+9.54s  drift returned to zero
+T+9.54s  all 1920 orphaned sessions reclaimed
+
+--- drift trace (51 samples at ~10Hz) ---
+first non-zero reading at T+6.60s, peak -1920
+back to zero at T+9.56s
+
+--- restarting beacon-gateway-2 ---
+gateway-2 rejoined the ring after 1.73s
+
+==============================================================================
+RESULTS
+==============================================================================
+sessions dropped by the kill            1920
+connections before kill (cluster)       6000
+min connections on survivors after      4080
+time until ring excluded dead node      9.54s
+drift went non-zero                     yes
+peak drift magnitude                    -1920
+time until drift returned to zero       9.56s
+drift samples taken                     51 at ~10Hz
+final drift                             0
+orphan reclamation began                6.76s
+all orphaned sessions reclaimed by      9.54s
+orphan sessions reclaimed               1920
+joins served by survivors during window 4241
+longest gap between join increments     5.64s (>= poll interval)
+ring after recovery                     gateway-1,gateway-3
+time for victim to rejoin the ring      1.73s
+convergence samples taken               4
+
+VERDICT: survivors continued serving JOINs throughout the failure.
+==============================================================================
+
+raw report: bench/results/chaos-20260808-181421.txt

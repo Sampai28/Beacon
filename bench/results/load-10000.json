@@ -1,0 +1,164 @@
+{
+  "target_connections": 10000,
+  "conns_per_vu": 25,
+  "vus": 400,
+  "gateways": [
+    "gateway-1:8080",
+    "gateway-2:8080",
+    "gateway-3:8080"
+  ],
+  "ramp": "60s",
+  "hold": "60s",
+  "threshold_failures": [],
+  "metrics": {
+      "data_received": {
+        "type": "counter",
+        "contains": "data",
+        "values": {
+          "count": 35891002,
+          "rate": 256369.86258875593
+        }
+      },
+      "ws_msgs_received": {
+        "type": "counter",
+        "contains": "default",
+        "values": {
+          "rate": 3032.9872368553283,
+          "count": 424609
+        }
+      },
+      "beacon_connect_ms": {
+        "values": {
+          "min": 3,
+          "med": 9,
+          "avg": 10.6632,
+          "p(90)": 17,
+          "p(95)": 25,
+          "p(99)": 44,
+          "max": 87
+        },
+        "type": "trend",
+        "contains": "time"
+      },
+      "beacon_join_success": {
+        "type": "rate",
+        "contains": "default",
+        "values": {
+          "rate": 1,
+          "passes": 204850,
+          "fails": 0
+        },
+        "thresholds": {
+          "rate>0.90": {
+            "ok": true
+          }
+        }
+      },
+      "ws_connecting": {
+        "type": "trend",
+        "contains": "time",
+        "values": {
+          "min": 0.298375,
+          "med": 0.83594,
+          "avg": 1.372404701999994,
+          "p(90)": 1.6634355000000012,
+          "p(95)": 2.4975161999999993,
+          "p(99)": 20.101387150000015,
+          "max": 45.029166
+        }
+      },
+      "beacon_presence_received": {
+        "type": "counter",
+        "contains": "default",
+        "values": {
+          "count": 83584,
+          "rate": 597.0415257456054
+        }
+      },
+      "beacon_frames_sent": {
+        "type": "counter",
+        "contains": "default",
+        "values": {
+          "count": 425975,
+          "rate": 3042.7445914228115
+        }
+      },
+      "beacon_connect_success": {
+        "type": "rate",
+        "contains": "default",
+        "values": {
+          "passes": 10000,
+          "fails": 0,
+          "rate": 1
+        },
+        "thresholds": {
+          "rate>0.95": {
+            "ok": true
+          }
+        }
+      },
+      "beacon_join_ms": {
+        "values": {
+          "min": 0,
+          "med": 2,
+          "avg": 4.807615328288992,
+          "p(90)": 14,
+          "p(95)": 18,
+          "p(99)": 27,
+          "max": 75
+        },
+        "thresholds": {
+          "p(95)<500": {
+            "ok": true
+          },
+          "p(99)<1000": {
+            "ok": true
+          }
+        },
+        "type": "trend",
+        "contains": "time"
+      },
+      "data_sent": {
+        "type": "counter",
+        "contains": "data",
+        "values": {
+          "count": 28616685,
+          "rate": 204409.32803145793
+        }
+      },
+      "ws_msgs_sent": {
+        "type": "counter",
+        "contains": "default",
+        "values": {
+          "count": 425975,
+          "rate": 3042.7445914228115
+        }
+      },
+      "vus": {
+        "type": "gauge",
+        "contains": "default",
+        "values": {
+          "value": 4,
+          "min": 4,
+          "max": 400
+        }
+      },
+      "ws_sessions": {
+        "type": "counter",
+        "contains": "default",
+        "values": {
+          "count": 10000,
+          "rate": 71.43012128464842
+        }
+      },
+      "vus_max": {
+        "type": "gauge",
+        "contains": "default",
+        "values": {
+          "value": 400,
+          "min": 400,
+          "max": 400
+        }
+      }
+    }
+}

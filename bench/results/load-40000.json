@@ -1,0 +1,209 @@
+{
+  "target_connections": 40000,
+  "conns_per_vu": 50,
+  "vus": 800,
+  "gateways": [
+    "gateway-1:8080",
+    "gateway-2:8080",
+    "gateway-3:8080"
+  ],
+  "ramp": "120s",
+  "hold": "60s",
+  "threshold_failures": [
+    "beacon_join_ms: p(95)<500",
+    "beacon_join_ms: p(99)<1000"
+  ],
+  "metrics": {
+    "iterations": {
+      "type": "counter",
+      "contains": "default",
+      "values": {
+        "count": 57,
+        "rate": 0.2792017735400825
+      }
+    },
+    "iteration_duration": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "avg": 120391.10674194735,
+        "p(90)": 120661.1002938,
+        "p(95)": 120831.998045,
+        "p(99)": 121038.8857532,
+        "max": 121122.7534,
+        "min": 119587.455685,
+        "med": 120465.294617
+      }
+    },
+    "beacon_connect_success": {
+      "contains": "default",
+      "values": {
+        "rate": 1,
+        "passes": 41950,
+        "fails": 0
+      },
+      "thresholds": {
+        "rate>0.95": {
+          "ok": true
+        }
+      },
+      "type": "rate"
+    },
+    "data_sent": {
+      "contains": "data",
+      "values": {
+        "count": 136566923,
+        "rate": 668942.5808510857
+      },
+      "type": "counter"
+    },
+    "ws_connecting": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "med": 0.99945,
+        "avg": 3.5458769824552894,
+        "p(90)": 5.489184899999998,
+        "p(95)": 10.804526749999916,
+        "p(99)": 55.71231119000029,
+        "max": 255.2792,
+        "min": 0.264157
+      }
+    },
+    "ws_session_duration": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "med": 119906.652119,
+        "avg": 121283.3602864166,
+        "p(90)": 120541.6445128,
+        "p(95)": 120764.5194003,
+        "p(99)": 172801.15739627,
+        "max": 172961.767458,
+        "min": 65388.455899
+      }
+    },
+    "beacon_connect_ms": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "max": 5576,
+        "min": 4,
+        "med": 24,
+        "avg": 609.3813110846246,
+        "p(90)": 2917.399999999994,
+        "p(95)": 4042,
+        "p(99)": 4429
+      }
+    },
+    "beacon_ws_errors": {
+      "type": "counter",
+      "contains": "default",
+      "values": {
+        "count": 43,
+        "rate": 0.21062589933725523
+      }
+    },
+    "ws_msgs_received": {
+      "type": "counter",
+      "contains": "default",
+      "values": {
+        "count": 1926234,
+        "rate": 9435.227176372058
+      }
+    },
+    "vus": {
+      "type": "gauge",
+      "contains": "default",
+      "values": {
+        "value": 25,
+        "min": 5,
+        "max": 800
+      }
+    },
+    "vus_max": {
+      "type": "gauge",
+      "contains": "default",
+      "values": {
+        "value": 800,
+        "min": 800,
+        "max": 800
+      }
+    },
+    "ws_sessions": {
+      "type": "counter",
+      "contains": "default",
+      "values": {
+        "count": 41950,
+        "rate": 205.48270877204317
+      }
+    },
+    "beacon_join_success": {
+      "type": "rate",
+      "contains": "default",
+      "values": {
+        "rate": 0.9722501395265489,
+        "passes": 900641,
+        "fails": 25706
+      },
+      "thresholds": {
+        "rate>0.90": {
+          "ok": true
+        }
+      }
+    },
+    "data_received": {
+      "values": {
+        "count": 165917486,
+        "rate": 812709.7605703826
+      },
+      "type": "counter",
+      "contains": "data"
+    },
+    "beacon_frames_sent": {
+      "type": "counter",
+      "contains": "default",
+      "values": {
+        "count": 2052274,
+        "rate": 10052.605975266653
+      }
+    },
+    "beacon_presence_received": {
+      "contains": "default",
+      "values": {
+        "count": 381387,
+        "rate": 1868.139066756692
+      },
+      "type": "counter"
+    },
+    "ws_msgs_sent": {
+      "type": "counter",
+      "contains": "default",
+      "values": {
+        "count": 2052157,
+        "rate": 10052.032876889387
+      }
+    },
+    "beacon_join_ms": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "max": 6361,
+        "min": 0,
+        "med": 873,
+        "avg": 1423.0971246963873,
+        "p(90)": 4019,
+        "p(95)": 4498,
+        "p(99)": 4894
+      },
+      "thresholds": {
+        "p(95)<500": {
+          "ok": false
+        },
+        "p(99)<1000": {
+          "ok": false
+        }
+      }
+    }
+  }
+}

@@ -53,12 +53,32 @@ precisely when the system is least able to absorb extra churn.
 Ring membership derives from the Redis node registry, so a dead gateway drops
 out on TTL expiry and the ring rebalances without any explicit failover signal.
 
-## Open questions carried forward
+## Questions the benchmarks answered
 
-- Reaper cadence versus heartbeat TTL: too tight and a briefly-slow client is
-  reaped; too loose and orphaned sessions linger. Needs measurement, not a guess.
-- Whether drift can be held at exactly zero under load, or only converge to zero
-  shortly after. Step 9 answers this with data.
+- **Reaper cadence versus heartbeat TTL.** Settled empirically at a 2 s sweep
+  against a 30 s session TTL and a 6 s node TTL. The sweep interval turned out to
+  matter for a reason not anticipated: it is the throughput ceiling. Sweep p99
+  crosses 2 s somewhere between 20,000 and 30,000 sessions, and join latency
+  degrades in step, because an unchunked pipelined scan contends with the request
+  path on the same Redis pool.
+
+- **Can drift be held at exactly zero under load?** Yes in steady state — it read
+  zero on all three gateways at every load level once connections plateaued. Not
+  during failover, and it should not be: after a gateway is killed, drift is the
+  signal that Redis still holds sessions no live node is serving. Measured peak
+  −1,920 with a return to zero 3.0 s later.
+
+- **Is failover time dominated by anything interesting?** No — it is dominated by
+  `BEACON_NODE_TTL` elapsing, 6 s of a ~9.5 s convergence. The mechanism is
+  boring on purpose: nothing detects the failure, so nothing about the detection
+  can fail.
+
+## Open questions
+
+- Whether chunking the reaper sweep across intervals lifts the ceiling
+  proportionally, or merely moves the contention elsewhere.
+- Whether a dedicated Redis connection pool for the reaper is a cleaner fix than
+  chunking, given it trades contention for connection count.
 
 ## Branch history
 

@@ -11,6 +11,4 @@
 // drift reconciliation between in-memory connection counts and Redis
 // cardinality. Each check exports its own metric; violations are surfaced, not
 // swallowed.
-//
-// Implemented in step 5.
 package presence

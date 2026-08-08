@@ -14,8 +14,16 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/redis/go-redis/v9"
+
+	"github.com/Sampai28/Beacon/internal/metrics"
+	"github.com/Sampai28/Beacon/internal/presence"
 )
 
 // config is the full set of knobs a gateway reads at startup. Everything is
@@ -27,8 +35,8 @@ type config struct {
 	// session hash this node owns, so it must be stable and unique.
 	GatewayID string
 
-	// HTTPAddr is the listen address serving the WebSocket upgrade endpoint,
-	// the probes, /metrics and /debug/ring.
+	// HTTPAddr is the listen address serving the WebSocket endpoint, the probes,
+	// /metrics, /debug/ring and the demo client.
 	HTTPAddr string
 
 	// RedisAddr points at the shared session store, pub/sub bus and node
@@ -40,18 +48,36 @@ type config struct {
 	// rejection path to exercise. It is never logged.
 	DevToken string
 
-	// ShutdownGrace bounds how long in-flight work may take to drain before
-	// the process exits regardless.
+	// WebDir holds the static demo client.
+	WebDir string
+
+	// ShutdownGrace bounds how long in-flight work may take to drain before the
+	// process exits regardless.
 	ShutdownGrace time.Duration
+
+	// Presence carries the timing knobs that govern presence correctness.
+	Presence presence.Config
 }
 
 func loadConfig() config {
+	gatewayID := env("BEACON_GATEWAY_ID", defaultGatewayID())
+
+	p := presence.DefaultConfig(gatewayID)
+	p.SessionTTL = envDuration("BEACON_SESSION_TTL", p.SessionTTL)
+	p.NodeTTL = envDuration("BEACON_NODE_TTL", p.NodeTTL)
+	p.RegistryInterval = envDuration("BEACON_REGISTRY_INTERVAL", p.RegistryInterval)
+	p.ReaperInterval = envDuration("BEACON_REAPER_INTERVAL", p.ReaperInterval)
+	p.DriftInterval = envDuration("BEACON_DRIFT_INTERVAL", p.DriftInterval)
+	p.RingReplicas = envInt("BEACON_RING_REPLICAS", p.RingReplicas)
+
 	return config{
-		GatewayID:     env("BEACON_GATEWAY_ID", defaultGatewayID()),
+		GatewayID:     gatewayID,
 		HTTPAddr:      env("BEACON_HTTP_ADDR", ":8080"),
 		RedisAddr:     env("BEACON_REDIS_ADDR", "localhost:6379"),
 		DevToken:      env("BEACON_DEV_TOKEN", "beacon-dev-token"),
+		WebDir:        env("BEACON_WEB_DIR", "./web"),
 		ShutdownGrace: envDuration("BEACON_SHUTDOWN_GRACE", 10*time.Second),
+		Presence:      p,
 	}
 }
 
@@ -68,10 +94,22 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	d, err := time.ParseDuration(v)
-	if err != nil {
+	if err != nil || d <= 0 {
 		return fallback
 	}
 	return d
+}
+
+func envInt(key string, fallback int) int {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return fallback
+	}
+	return n
 }
 
 // defaultGatewayID falls back to the container hostname, which Compose already
@@ -101,21 +139,62 @@ func main() {
 }
 
 func run(cfg config, log *slog.Logger) error {
-	srv := newServer(cfg, log)
+	// Trap termination first, so a signal arriving during startup is honoured
+	// rather than racing the listener.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	registry := prometheus.NewRegistry()
+	registry.MustRegister(
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+	)
+	m := metrics.New(registry, cfg.GatewayID)
+
+	rdb := redis.NewClient(&redis.Options{
+		Addr: cfg.RedisAddr,
+		// A gateway holding thousands of sockets issues a Redis command per
+		// heartbeat and per presence change; the default pool of 10 per CPU
+		// becomes the bottleneck well before Redis does.
+		PoolSize:     64,
+		MinIdleConns: 8,
+		DialTimeout:  5 * time.Second,
+		ReadTimeout:  3 * time.Second,
+		WriteTimeout: 3 * time.Second,
+	})
+	defer func() { _ = rdb.Close() }()
+
+	pingCtx, cancelPing := context.WithTimeout(ctx, 10*time.Second)
+	err := rdb.Ping(pingCtx).Err()
+	cancelPing()
+	if err != nil {
+		return err
+	}
+	log.Info("connected to redis", "addr", cfg.RedisAddr)
+
+	svc := presence.NewService(ctx, rdb, cfg.Presence, m, log)
+	h := newHub(m)
+	svc.SetConnectionCounter(h.count)
+
+	srv := newServer(cfg, log, m, registry, svc, h)
+
+	// Eviction notices arrive on this gateway's control channel. Wired before
+	// the service starts so a notice for a session claimed during startup is not
+	// missed.
+	svc.Bus.OnControl(func(cm presence.ControlMessage) {
+		if cm.Type == presence.ControlEvict {
+			srv.evictLocal(cm.UserID, cm.SessionID)
+		}
+	})
 
 	httpSrv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           srv,
 		ReadHeaderTimeout: 5 * time.Second,
-		// No WriteTimeout: the WebSocket endpoint added in a later step hijacks
-		// the connection and would be killed mid-stream by one.
+		// No WriteTimeout: the WebSocket endpoint hijacks the connection and
+		// would be killed mid-stream by one.
 		IdleTimeout: 120 * time.Second,
 	}
-
-	// Trap termination first, so a signal arriving during startup is still
-	// honoured rather than racing the listener.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -127,11 +206,25 @@ func run(cfg config, log *slog.Logger) error {
 		errCh <- nil
 	}()
 
-	// Redis connection, ring join and reaper start land here in later steps.
-	// Readiness flips only once those succeed; for now the scaffold is ready as
-	// soon as it is listening.
+	// Join the ring before reporting ready. Accepting connections while
+	// invisible to the registry would mean nothing reaps this node's sessions if
+	// it died in that window.
+	if err := svc.Start(ctx); err != nil {
+		return err
+	}
+
+	serviceDone := make(chan struct{})
+	go func() {
+		defer close(serviceDone)
+		svc.Run(ctx)
+	}()
+
 	srv.markReady()
-	log.Info("gateway ready", "redis_addr", cfg.RedisAddr)
+	log.Info("gateway ready",
+		"redis_addr", cfg.RedisAddr,
+		"session_ttl", cfg.Presence.SessionTTL,
+		"node_ttl", cfg.Presence.NodeTTL,
+		"reaper_interval", cfg.Presence.ReaperInterval)
 
 	select {
 	case err := <-errCh:
@@ -143,15 +236,27 @@ func run(cfg config, log *slog.Logger) error {
 		log.Info("shutdown signal received, draining")
 	}
 
-	// Fail readiness before draining so load balancers and the node registry
-	// stop steering new work here while existing connections finish.
+	// Fail readiness first so nothing new is steered here, then leave the ring
+	// so surviving nodes pick up this node's shards immediately rather than
+	// waiting out a TTL.
 	srv.markUnready()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownGrace)
 	defer cancel()
 
+	if err := svc.Shutdown(shutdownCtx); err != nil {
+		log.Warn("presence shutdown incomplete", "err", err)
+	}
+	srv.closeAllConnections()
+
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 		return err
+	}
+
+	select {
+	case <-serviceDone:
+	case <-shutdownCtx.Done():
+		log.Warn("background loops did not stop within the grace period")
 	}
 	return nil
 }

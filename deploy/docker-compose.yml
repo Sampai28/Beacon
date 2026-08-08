@@ -1,0 +1,164 @@
+# Beacon local stack: 3 gateway replicas, Redis, Prometheus, Grafana, k6.
+#
+# Everything runs on localhost. No account, API key, or paid service is involved.
+#
+#   docker compose -f deploy/docker-compose.yml up -d --build
+#
+# Demo client:  http://localhost:8081  (also :8082, :8083)
+# Prometheus:   http://localhost:9090
+# Grafana:      http://localhost:3000  (anonymous, auto-provisioned)
+
+name: beacon
+
+x-gateway-common: &gateway-common
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+  depends_on:
+    redis:
+      condition: service_healthy
+  environment: &gateway-env
+    BEACON_REDIS_ADDR: "redis:6379"
+    BEACON_DEV_TOKEN: "beacon-dev-token"
+    BEACON_SESSION_TTL: "30s"
+    BEACON_NODE_TTL: "6s"
+    BEACON_REGISTRY_INTERVAL: "2s"
+    BEACON_REAPER_INTERVAL: "2s"
+    BEACON_DRIFT_INTERVAL: "5s"
+  # The default soft limit of 1024 descriptors caps a gateway at roughly a
+  # thousand sockets — well below the load target, and it fails as opaque
+  # "too many open files" errors rather than as a clear ceiling.
+  ulimits:
+    nofile:
+      soft: 1048576
+      hard: 1048576
+  healthcheck:
+    test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/readyz"]
+    interval: 5s
+    timeout: 3s
+    retries: 5
+    start_period: 5s
+  restart: unless-stopped
+  networks: [beacon]
+
+services:
+  redis:
+    image: redis:7-alpine
+    # No persistence: session state is ephemeral by definition, and an AOF
+    # rewrite pausing Redis mid-benchmark would corrupt the measurement rather
+    # than protect anything worth keeping.
+    command: >
+      redis-server
+      --save ""
+      --appendonly no
+      --maxclients 20000
+      --tcp-backlog 4096
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 2s
+      retries: 10
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+    networks: [beacon]
+
+  gateway-1:
+    <<: *gateway-common
+    container_name: beacon-gateway-1
+    environment:
+      <<: *gateway-env
+      BEACON_GATEWAY_ID: "gateway-1"
+    ports:
+      - "8081:8080"
+
+  gateway-2:
+    <<: *gateway-common
+    container_name: beacon-gateway-2
+    environment:
+      <<: *gateway-env
+      BEACON_GATEWAY_ID: "gateway-2"
+    ports:
+      - "8082:8080"
+
+  gateway-3:
+    <<: *gateway-common
+    container_name: beacon-gateway-3
+    environment:
+      <<: *gateway-env
+      BEACON_GATEWAY_ID: "gateway-3"
+    ports:
+      - "8083:8080"
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=6h"
+      # 1s scrapes would be nicer for the chaos test, but Prometheus clamps
+      # below 1s and the chaos script polls /metrics directly for the timings
+      # that need finer resolution.
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - gateway-1
+      - gateway-2
+      - gateway-3
+    networks: [beacon]
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    environment:
+      # Anonymous admin access: this is a localhost demo, and a login wall
+      # between a reviewer and the dashboards serves nobody.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_USERS_DEFAULT_THEME: "dark"
+      GF_DASHBOARDS_MIN_REFRESH_INTERVAL: "1s"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    networks: [beacon]
+
+  # Load generator. Not started by `up` — run it explicitly:
+  #   docker compose -f deploy/docker-compose.yml run --rm k6 run /scripts/load.js
+  #
+  # k6 runs inside the Compose network on purpose. On the host it would share
+  # the OS ephemeral port range (16,384 ports on Windows), capping the test well
+  # below the target for reasons that have nothing to do with Beacon.
+  k6:
+    image: grafana/k6:0.53.0
+    profiles: ["bench"]
+    volumes:
+      - ../bench:/scripts:ro
+      - ../bench/results:/results
+    environment:
+      LOAD_VUS: "${LOAD_VUS:-10000}"
+      LOAD_DURATION: "${LOAD_DURATION:-60s}"
+      LOAD_RAMP: "${LOAD_RAMP:-60s}"
+      BEACON_DEV_TOKEN: "beacon-dev-token"
+      GATEWAYS: "gateway-1:8080,gateway-2:8080,gateway-3:8080"
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+    depends_on:
+      - gateway-1
+      - gateway-2
+      - gateway-3
+    networks: [beacon]
+
+networks:
+  beacon:
+    driver: bridge

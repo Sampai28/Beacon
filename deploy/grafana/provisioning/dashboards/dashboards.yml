@@ -1,0 +1,16 @@
+apiVersion: 1
+
+providers:
+  - name: beacon
+    orgId: 1
+    folder: Beacon
+    type: file
+    disableDeletion: false
+    # Dashboards are checked into the repo and mounted read-only, so edits made
+    # in the UI are deliberately transient — the JSON in git is the source of
+    # truth.
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

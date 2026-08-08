@@ -1,0 +1,34 @@
+# Prometheus config for the Beacon local stack.
+#
+# Scrape interval is 1s rather than the usual 15s. The failover behaviour this
+# project exists to measure happens over single-digit seconds — a node leaving
+# the ring, drift spiking and returning to zero — and at 15s those transitions
+# are one or two samples wide, which is indistinguishable from noise on a graph.
+
+global:
+  scrape_interval: 1s
+  scrape_timeout: 900ms
+  evaluation_interval: 5s
+  external_labels:
+    stack: beacon-local
+
+scrape_configs:
+  - job_name: beacon-gateways
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - gateway-1:8080
+          - gateway-2:8080
+          - gateway-3:8080
+    relabel_configs:
+      # Strip the port so `instance` reads as the service name. The dashboards
+      # join on gateway_id (a real label the gateway sets) rather than on
+      # instance, which changes whenever a replica restarts.
+      - source_labels: [__address__]
+        regex: "([^:]+):.*"
+        target_label: instance
+        replacement: "$1"
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

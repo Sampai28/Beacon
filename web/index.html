@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Beacon — presence demo</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <h1>Beacon</h1>
+  <p class="sub">
+    Sharded presence demo. Open this page in two tabs against
+    <strong>different gateway ports</strong> (8081 / 8082 / 8083), connect as
+    different users, and watch presence cross nodes.
+  </p>
+</header>
+
+<main>
+  <section class="panel" id="connect-panel">
+    <h2>1 &middot; Connect</h2>
+    <div class="row">
+      <label for="gateway">Gateway</label>
+      <select id="gateway"></select>
+    </div>
+    <div class="row">
+      <label for="userId">User ID</label>
+      <input id="userId" type="text" placeholder="alice" autocomplete="off">
+    </div>
+    <div class="row">
+      <label for="token">Token</label>
+      <input id="token" type="text" value="beacon-dev-token" autocomplete="off">
+    </div>
+    <div class="row actions">
+      <button id="connect" class="primary">Connect</button>
+      <button id="disconnect" disabled>Disconnect</button>
+    </div>
+    <div id="status" class="status idle">Not connected</div>
+  </section>
+
+  <section class="panel" id="presence-panel">
+    <h2>2 &middot; Set your presence</h2>
+    <div class="row">
+      <label for="status-select">Status</label>
+      <select id="status-select">
+        <option value="ONLINE">ONLINE</option>
+        <option value="IN_GAME">IN_GAME</option>
+        <option value="AWAY">AWAY</option>
+        <option value="OFFLINE">OFFLINE</option>
+      </select>
+    </div>
+    <div class="row">
+      <label for="placeId">Place ID</label>
+      <input id="placeId" type="text" placeholder="place-42" autocomplete="off">
+    </div>
+    <div class="row">
+      <label for="serverId">Server ID</label>
+      <input id="serverId" type="text" placeholder="srv-7" autocomplete="off">
+    </div>
+    <div class="row actions">
+      <button id="set-presence" disabled>Send SET_PRESENCE</button>
+    </div>
+    <p class="hint">
+      JOIN only succeeds against a user who is <code>IN_GAME</code> with both a
+      place and a server. Anything else is denied &mdash; deliberately.
+    </p>
+  </section>
+
+  <section class="panel" id="watch-panel">
+    <h2>3 &middot; Watch others</h2>
+    <div class="row">
+      <label for="watchIds">User IDs</label>
+      <input id="watchIds" type="text" placeholder="bob, carol" autocomplete="off">
+    </div>
+    <div class="row actions">
+      <button id="subscribe" disabled>Subscribe</button>
+    </div>
+    <div id="watched" class="watched">
+      <p class="empty">Nobody watched yet.</p>
+    </div>
+  </section>
+
+  <section class="panel wide">
+    <h2>Frame log</h2>
+    <div class="row actions">
+      <button id="clear-log" class="ghost">Clear</button>
+      <span class="counter" id="frame-count">0 frames</span>
+    </div>
+    <div id="log" class="log"></div>
+  </section>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

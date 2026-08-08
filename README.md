@@ -181,10 +181,36 @@ curl -s localhost:8080/healthz; curl -s localhost:8080/readyz
 
 ### Full stack
 
-`make up` brings up 3 gateways, Redis, Prometheus and Grafana, with the demo
-client and dashboards provisioned as code. `make load` runs the k6 load test,
-`make chaos` runs the gateway-kill measurement, `make down` tears it all
-down.
+```bash
+docker compose -f deploy/docker-compose.yml up -d --build
+```
+
+| Service | URL |
+|---|---|
+| Demo client | http://localhost:8081 (also `:8082`, `:8083`) |
+| Grafana | http://localhost:3000 — anonymous, dashboards pre-provisioned |
+| Prometheus | http://localhost:9090 |
+| Ring state | http://localhost:8081/debug/ring |
+
+**To see cross-node fan-out for yourself:** open http://localhost:8081 in one tab
+and http://localhost:8082 in another, connect as `alice` and `bob`, have bob
+subscribe to `alice`, then change alice's presence. Bob's tab updates without
+the two gateways ever talking to each other.
+
+`make up`, `make down`, `make logs`, `make load` and `make chaos` wrap the same
+commands.
+
+### Integration tests
+
+With the stack running:
+
+```bash
+go test -tags=integration -count=1 -v ./test/...
+```
+
+These pin two clients to *different* gateway processes and assert that presence
+crosses the boundary — the one thing unit tests against an in-process fake
+cannot show.
 
 ### Configuration
 
@@ -258,6 +284,26 @@ at-most-once, so a subscriber disconnected at the moment of publish misses the
 event. Beacon compensates with snapshot-on-subscribe and the drift reconciler
 rather than pretending delivery is guaranteed.
 
+**Duplicate-session policy: last writer wins, and the user does not go offline.**
+When a user connects while already connected elsewhere, the new connection takes
+the session and the old one is evicted. The alternative — rejecting the newcomer
+— strands a user whose previous session is a half-dead socket the owning gateway
+has not yet noticed, which is the common case rather than the rare one.
+
+The eviction notice is addressed to the specific gateway holding the old
+session, over a per-gateway control channel, because the claiming gateway
+already learns the displaced gateway's ID from the claim script. That costs one
+subscription per gateway instead of one per connection.
+
+The evicted client is sent an `OFFLINE` presence frame and an `ERROR`, then
+closed — but that `OFFLINE` is deliberately **not** published to the bus. The
+*session* ended; the *user* did not. They are live on the connection that
+displaced this one, and publishing a cluster-wide `OFFLINE` would race the new
+session's `ONLINE` and could leave every watcher believing a connected user is
+offline. Eviction also sticks without relying on that notice arriving: the
+evicted connection's next heartbeat fails the session-ID check in Redis and
+closes itself.
+
 **Stateless gateways.** In-memory connection tables exist purely for efficiency.
 Redis is authoritative, and any divergence between the two is treated as a
 defect to report via `beacon_presence_drift` rather than something to reconcile
@@ -299,6 +345,36 @@ since cgo is unavailable natively.
 
 *Verified:* `go build`, `go vet`, `gofmt` clean, `go test ./...` (5 pass),
 race-clean in a container, plus a runtime smoke test of the probes.
+
+### `system` — the running cluster: presence, gateway, demo client, deploy stack
+
+Everything that turns the previous branch's pure functions into a service. The
+presence layer puts session state in Redis behind Lua scripts, because three
+gateways can act on the same user concurrently and a read-modify-write done in
+Go would let a stale presence overwrite a fresh one between the read and the
+write — exactly the corruption the out-of-order check exists to prevent. Node
+liveness is a TTL rather than a flag: a gateway that dies stops refreshing its
+key and disappears, so there is no failover path that can itself fail. The
+reaper handles both a session whose hash expired and one whose gateway vanished,
+and only for shards the ring assigns it. The gateway adds the WebSocket
+transport, `/metrics`, `/debug/ring` and a static demo client, and `deploy/`
+brings up three replicas, Redis, Prometheus and Grafana with both dashboards
+provisioned as code.
+
+One bug worth recording: `close()` originally tore down the socket directly, so
+a rejected client never received the `ERROR` explaining why — the frame was
+still queued when the connection went away. The write pump now owns the socket
+and drains before closing, which is also what makes eviction observable to the
+client being evicted.
+
+*Verified:* 121 unit tests and 86 subtests passing, race-clean under
+`golang:1.25`. Against the live Compose stack: all three gateways healthy and
+agreeing on ring membership, **presence propagated gateway-1 → gateway-3**,
+`JOIN` resolved a target connected to another node from all three gateways,
+cross-gateway duplicate eviction fired, malformed frames rejected without
+dropping the connection, and `beacon_presence_drift` read zero on every node.
+Every Grafana panel query was checked against live Prometheus data rather than
+assumed — measured JOIN p99 at that moment was 495 µs.
 
 ### `ring` — the dependency-light core: ring, protocol codec, metrics
 

@@ -1,0 +1,30 @@
+# Build output
+/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go test/coverage artifacts
+*.test
+*.out
+coverage.html
+
+# Local environment overrides — never commit secrets, even dev ones
+.env
+.env.local
+
+# Container-mounted state we do not want in git
+deploy/data/
+deploy/grafana-data/
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Benchmark results are deliberately NOT ignored: bench/results/ is committed
+# so the numbers in the README can be traced back to the raw run output.

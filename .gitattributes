@@ -1,0 +1,24 @@
+# Beacon is developed on Windows but every service runs in a Linux container.
+# Without this, Git's autocrlf turns shell scripts and the Makefile into CRLF
+# files that fail inside the container with opaque errors ("\r: command not
+# found", "missing separator"). Normalise to LF for everything the containers
+# execute or parse.
+
+* text=auto eol=lf
+
+*.go        text eol=lf
+*.js        text eol=lf
+*.sh        text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.json      text eol=lf
+*.md        text eol=lf
+Makefile    text eol=lf
+Dockerfile  text eol=lf
+.gitignore  text eol=lf
+
+# Binary assets must never be line-ending mangled.
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary

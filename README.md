@@ -402,35 +402,6 @@ reporting zero connections instead of an error.
 *Verified:* four load runs and one chaos run, raw output committed. Headline
 numbers are in [Benchmark results](#benchmark-results).
 
-## Resume bullets
-
-Each figure comes from a run on the hardware above, with raw output in
-`bench/results/`.
-
-- Built a horizontally-sharded real-time presence service in Go (WebSocket,
-  Redis, custom consistent hash ring) sustaining **20,000 concurrent connections
-  across 3 gateway replicas at 100% connection success**, answering **469,215
-  cross-node session-join requests at p99 38 ms**.
-
-- Designed TTL-based node membership with a consistent hash ring assigning
-  stale-session cleanup to exactly one owner. Under a `SIGKILL` of a gateway
-  holding 1,920 sessions, survivors **reclaimed exactly 1,920 orphaned sessions
-  with zero loss or double-count**, returned state drift to zero **3.0 s** after
-  divergence, and **served 4,241 join requests during the failure window**.
-
-- Implemented six self-auditing integrity checks (frame validation,
-  duplicate-session eviction, out-of-order rejection, stale reaping, orphan
-  detection, drift reconciliation), each exported to Prometheus and surfaced on
-  two provisioned Grafana dashboards. Verified by **121 unit tests and 86
-  subtests, race-clean**, plus cross-node integration tests against a live
-  3-replica cluster.
-
-- Diagnosed the throughput ceiling from process metrics rather than assumption,
-  ruling out file descriptors (**13,673 used of 1,048,576**), memory, CPU and
-  ephemeral ports, and traced degradation past 20,000 connections to an unchunked
-  reaper scan whose **p99 sweep exceeded its 2 s interval**, starving the request
-  path on a shared Redis pool.
-
 ## License
 
 Unlicensed personal project. All dependencies are free and open source. Nothing

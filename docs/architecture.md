@@ -57,10 +57,31 @@ out on TTL expiry and the ring rebalances without any explicit failover signal.
 
 - **Reaper cadence versus heartbeat TTL.** Settled empirically at a 2 s sweep
   against a 30 s session TTL and a 6 s node TTL. The sweep interval turned out to
-  matter for a reason not anticipated: it is the throughput ceiling. Sweep p99
-  crosses 2 s somewhere between 20,000 and 30,000 sessions, and join latency
-  degrades in step, because an unchunked pipelined scan contends with the request
-  path on the same Redis pool.
+  matter for a reason not anticipated: it was the throughput ceiling. Sweep p99
+  crossed 2 s somewhere between 20,000 and 30,000 sessions, and join latency
+  degraded in step, because an unchunked pipelined scan contended with the
+  request path on the same Redis pool. Fixed on `perf/chunked-reaper`; the
+  cadence itself was never the problem, the shape of the work inside it was.
+
+- **Does chunking the sweep lift the ceiling, or move the contention?** It lifts
+  it. The highest fully clean load result went from 20,000 to at least 50,000
+  connections, and JOIN p99 at 40,000 fell from 4,894 ms to 53 ms. The
+  contention did not reappear elsewhere: connect latency improved by the same
+  order, and no other resource moved toward its limit.
+
+- **Is a dedicated Redis pool a cleaner fix than chunking?** Neither replaces
+  the other, so this was a false choice. Chunking bounds how long any single
+  burst occupies Redis, which is what stops the server being monopolised. A
+  separate pool bounds which *connections* background work may hold, which is
+  what stops cleanup and the request path competing at all. Both shipped
+  together, and the cost of the pool is eight extra connections per gateway.
+
+- **What does a sweep that cannot keep up look like?** Previously: nothing. It
+  ran past its interval and the next sweep started anyway, so the only visible
+  symptom was JOIN latency climbing for reasons a dashboard could not attribute.
+  A sweep now stops at a time budget and increments
+  `beacon_reaper_sweeps_truncated_total`, which turns "cleanup is falling
+  behind" into a signal rather than an inference.
 
 - **Can drift be held at exactly zero under load?** Yes in steady state — it read
   zero on all three gateways at every load level once connections plateaued. Not
@@ -75,10 +96,17 @@ out on TTL expiry and the ring rebalances without any explicit failover signal.
 
 ## Open questions
 
-- Whether chunking the reaper sweep across intervals lifts the ceiling
-  proportionally, or merely moves the contention elsewhere.
-- Whether a dedicated Redis connection pool for the reaper is a cleaner fix than
-  chunking, given it trades contention for connection count.
+- Where the connection ceiling actually is now. 50,000 is clean and nothing in
+  the gateways is near a limit; answering this needs a load generator that is
+  not sharing a memory budget with the service it is measuring.
+- Whether the session index should be sharded across several Redis keys rather
+  than walked as one set. Every gateway scans the whole index to find the
+  fraction it owns, which is wasted work proportional to cluster size — a
+  per-shard index would make the scan proportional to what a gateway actually
+  reaps.
+- Whether the reaper's time budget should adapt to observed sweep duration
+  rather than being a fixed 1.5 s. A budget that is too generous at one
+  connection count is too tight at another.
 
 ## Branch history
 

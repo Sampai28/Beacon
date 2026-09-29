@@ -52,9 +52,12 @@ func TestExportedMetricNamesAreStable(t *testing.T) {
 		"beacon_presence_events_total",
 		"beacon_presence_fanout_total",
 		"beacon_pubsub_errors_total",
+		"beacon_reaper_batches_total",
 		"beacon_reaper_duration_seconds",
 		"beacon_reaper_owned_sessions",
 		"beacon_reaper_runs_total",
+		"beacon_reaper_scan_pages_total",
+		"beacon_reaper_sweeps_truncated_total",
 		// beacon_redis_errors_total is intentionally omitted: its label values
 		// are Redis operation names, which are not known ahead of time, so it
 		// cannot be pre-seeded. See TestRedisErrorsAppearsOnlyOnceUsed.

@@ -31,6 +31,11 @@ const (
 	nodeSetKey = keyPrefix + "nodes"   // SET of gateway IDs
 )
 
+// defaultScanPage is the SSCAN COUNT hint used by callers that walk the whole
+// index without opinions about paging. Redis treats COUNT as advisory, so this
+// bounds the reply loosely rather than exactly.
+const defaultScanPage = 512
+
 // ErrNoSession is returned when a user has no live session.
 var ErrNoSession = errors.New("presence: no session for user")
 
@@ -372,15 +377,63 @@ func (s *Store) SessionCount(ctx context.Context) (int64, error) {
 	return n, nil
 }
 
+// ScanIndexedUsers returns one page of the session index and the cursor to
+// resume from. A zero cursor returned means the walk is complete.
+//
+// This exists instead of SMEMBERS because SMEMBERS is O(N) *inside Redis*: it
+// materialises the whole set in one reply while the server can do nothing else.
+// At the connection counts Beacon targets that set holds tens of thousands of
+// members, and the reaper reads it every two seconds on every gateway. SSCAN
+// gives the server somewhere to breathe between pages.
+//
+// SSCAN's guarantees are weaker than SMEMBERS' and the reaper relies on which
+// ones survive: members present for the whole walk are returned at least once,
+// members added or removed mid-walk may or may not appear, and a member may be
+// returned twice. All three are acceptable here. A session that appears twice
+// is checked twice and the second check finds nothing to do; one that is missed
+// is caught by the next sweep two seconds later. What the reaper must never do
+// is act on a *stale* read, and it does not — every deletion is guarded by the
+// session id read in the same pass.
+//
+// count is a hint, not a limit: Redis may return more or fewer.
+func (s *Store) ScanIndexedUsers(ctx context.Context, cursor uint64, count int64) ([]string, uint64, error) {
+	ids, next, err := s.rdb.SScan(ctx, sessionSetKey, cursor, "", count).Result()
+	if err != nil {
+		return nil, 0, fmt.Errorf("scan indexed users: %w", err)
+	}
+	return ids, next, nil
+}
+
 // IndexedUsers returns every userId in the session index, including any whose
 // session hash has already expired. Those are precisely what the reaper is
 // looking for.
+//
+// Built from ScanIndexedUsers rather than SMEMBERS so that no caller anywhere
+// issues a single unbounded command against the index. Duplicates that SSCAN
+// may return across pages are removed here, because a caller asking for "every
+// user" means the set, not the walk.
 func (s *Store) IndexedUsers(ctx context.Context) ([]string, error) {
-	ids, err := s.rdb.SMembers(ctx, sessionSetKey).Result()
-	if err != nil {
-		return nil, fmt.Errorf("indexed users: %w", err)
+	seen := make(map[string]struct{})
+	out := make([]string, 0, 256)
+
+	var cursor uint64
+	for {
+		page, next, err := s.ScanIndexedUsers(ctx, cursor, defaultScanPage)
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range page {
+			if _, dup := seen[id]; dup {
+				continue
+			}
+			seen[id] = struct{}{}
+			out = append(out, id)
+		}
+		if next == 0 {
+			return out, nil
+		}
+		cursor = next
 	}
-	return ids, nil
 }
 
 // Exists reports whether a session hash is still live, distinguishing an expired

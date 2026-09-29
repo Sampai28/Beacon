@@ -43,6 +43,15 @@ type config struct {
 	// registry.
 	RedisAddr string
 
+	// RedisPoolSize is the request path's connection pool.
+	RedisPoolSize int
+
+	// RedisBGPoolSize is the pool the reaper and drift reconciler use. Small
+	// on purpose: background work that cannot get a connection should wait,
+	// and the point of a separate pool is that its exhaustion is invisible to
+	// clients.
+	RedisBGPoolSize int
+
 	// DevToken is the dev-mode shared secret clients present in HELLO. This is
 	// deliberately not real authentication; it exists so the protocol has a
 	// rejection path to exercise. It is never logged.
@@ -69,15 +78,20 @@ func loadConfig() config {
 	p.ReaperInterval = envDuration("BEACON_REAPER_INTERVAL", p.ReaperInterval)
 	p.DriftInterval = envDuration("BEACON_DRIFT_INTERVAL", p.DriftInterval)
 	p.RingReplicas = envInt("BEACON_RING_REPLICAS", p.RingReplicas)
+	p.Reaper.BatchSize = envInt("BEACON_REAPER_BATCH", p.Reaper.BatchSize)
+	p.Reaper.ScanPage = int64(envInt("BEACON_REAPER_SCAN_PAGE", int(p.Reaper.ScanPage)))
+	p.Reaper.Budget = envDuration("BEACON_REAPER_BUDGET", p.Reaper.Budget)
 
 	return config{
-		GatewayID:     gatewayID,
-		HTTPAddr:      env("BEACON_HTTP_ADDR", ":8080"),
-		RedisAddr:     env("BEACON_REDIS_ADDR", "localhost:6379"),
-		DevToken:      env("BEACON_DEV_TOKEN", "beacon-dev-token"),
-		WebDir:        env("BEACON_WEB_DIR", "./web"),
-		ShutdownGrace: envDuration("BEACON_SHUTDOWN_GRACE", 10*time.Second),
-		Presence:      p,
+		GatewayID:       gatewayID,
+		HTTPAddr:        env("BEACON_HTTP_ADDR", ":8080"),
+		RedisAddr:       env("BEACON_REDIS_ADDR", "localhost:6379"),
+		RedisPoolSize:   envInt("BEACON_REDIS_POOL", 64),
+		RedisBGPoolSize: envInt("BEACON_REDIS_BG_POOL", 8),
+		DevToken:        env("BEACON_DEV_TOKEN", "beacon-dev-token"),
+		WebDir:          env("BEACON_WEB_DIR", "./web"),
+		ShutdownGrace:   envDuration("BEACON_SHUTDOWN_GRACE", 10*time.Second),
+		Presence:        p,
 	}
 }
 
@@ -156,7 +170,7 @@ func run(cfg config, log *slog.Logger) error {
 		// A gateway holding thousands of sockets issues a Redis command per
 		// heartbeat and per presence change; the default pool of 10 per CPU
 		// becomes the bottleneck well before Redis does.
-		PoolSize:     64,
+		PoolSize:     cfg.RedisPoolSize,
 		MinIdleConns: 8,
 		DialTimeout:  5 * time.Second,
 		ReadTimeout:  3 * time.Second,
@@ -164,15 +178,42 @@ func run(cfg config, log *slog.Logger) error {
 	})
 	defer func() { _ = rdb.Close() }()
 
+	// A second client for the reaper and the drift reconciler.
+	//
+	// Sharing one pool meant a sweep and a JOIN competed for the same
+	// connections, and at high session counts the sweep won: JOIN p99 tracked
+	// sweep duration almost exactly. Chunking the sweep shortens each burst,
+	// but only a separate pool makes it structurally impossible for cleanup to
+	// consume the connections clients are waiting on.
+	//
+	// Small, and with a longer ReadTimeout than the request path: a batch that
+	// takes a while is background work doing its job, while a client-facing
+	// read that takes that long is a failure.
+	bgRdb := redis.NewClient(&redis.Options{
+		Addr:         cfg.RedisAddr,
+		PoolSize:     cfg.RedisBGPoolSize,
+		MinIdleConns: 2,
+		DialTimeout:  5 * time.Second,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+	})
+	defer func() { _ = bgRdb.Close() }()
+
 	pingCtx, cancelPing := context.WithTimeout(ctx, 10*time.Second)
 	err := rdb.Ping(pingCtx).Err()
+	if err == nil {
+		err = bgRdb.Ping(pingCtx).Err()
+	}
 	cancelPing()
 	if err != nil {
 		return err
 	}
-	log.Info("connected to redis", "addr", cfg.RedisAddr)
+	log.Info("connected to redis",
+		"addr", cfg.RedisAddr,
+		"pool", cfg.RedisPoolSize,
+		"background_pool", cfg.RedisBGPoolSize)
 
-	svc := presence.NewService(ctx, rdb, cfg.Presence, m, log)
+	svc := presence.NewServiceWithBackground(ctx, rdb, bgRdb, cfg.Presence, m, log)
 	h := newHub(m)
 	svc.SetConnectionCounter(h.count)
 
@@ -224,7 +265,10 @@ func run(cfg config, log *slog.Logger) error {
 		"redis_addr", cfg.RedisAddr,
 		"session_ttl", cfg.Presence.SessionTTL,
 		"node_ttl", cfg.Presence.NodeTTL,
-		"reaper_interval", cfg.Presence.ReaperInterval)
+		"reaper_interval", cfg.Presence.ReaperInterval,
+		"reaper_batch", cfg.Presence.Reaper.BatchSize,
+		"reaper_scan_page", cfg.Presence.Reaper.ScanPage,
+		"reaper_budget", cfg.Presence.Reaper.Budget)
 
 	select {
 	case err := <-errCh:

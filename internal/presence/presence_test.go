@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -1022,6 +1023,330 @@ func TestReaperReclaimsSessionWithNoGatewayRecorded(t *testing.T) {
 	}
 	if res.Orphaned != 1 {
 		t.Errorf("Orphaned: got %d, want 1", res.Orphaned)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Reaper: chunking
+//
+// The sweep used to read the whole session index with SMEMBERS and queue one
+// HMGET per owned session into a single pipeline — roughly 13,000 commands in
+// one burst at 40,000 sessions, which starved the request path sharing that
+// pool. These tests pin the two properties the rewrite has to hold: the work is
+// actually divided, and dividing it does not change the answer.
+// ---------------------------------------------------------------------------
+
+func newReaperFixtureWithOptions(t *testing.T, gatewayID string, opts ReaperOptions) *reaperFixture {
+	t.Helper()
+	f := newReaperFixture(t, gatewayID)
+	f.reap = NewReaperWithOptions(
+		f.store, f.reg, f.bus, f.ring, gatewayID, testMetrics(), testLogger(), opts,
+	)
+	return f
+}
+
+// claimN registers n sessions owned by gatewayID and returns their user ids.
+func claimN(t *testing.T, ctx context.Context, store *Store, gatewayID string, n int) []string {
+	t.Helper()
+	ids := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		u := "user-" + strconv.Itoa(i)
+		if _, err := store.Claim(ctx, session(u, "s-"+u, gatewayID, protocol.StatusOnline, 1000)); err != nil {
+			t.Fatalf("Claim(%s): %v", u, err)
+		}
+		ids = append(ids, u)
+	}
+	return ids
+}
+
+func TestScanIndexedUsersWalksTheWholeIndex(t *testing.T) {
+	ctx := context.Background()
+	_, store := newStore(t)
+	want := claimN(t, ctx, store, "gw-1", 250)
+
+	seen := make(map[string]struct{})
+	var cursor uint64
+	pages := 0
+	for {
+		page, next, err := store.ScanIndexedUsers(ctx, cursor, 10)
+		if err != nil {
+			t.Fatalf("ScanIndexedUsers: %v", err)
+		}
+		pages++
+		for _, id := range page {
+			seen[id] = struct{}{}
+		}
+		if next == 0 {
+			break
+		}
+		cursor = next
+		if pages > 1000 {
+			t.Fatal("scan did not terminate")
+		}
+	}
+
+	if len(seen) != len(want) {
+		t.Errorf("scanned %d distinct users, want %d", len(seen), len(want))
+	}
+	for _, id := range want {
+		if _, ok := seen[id]; !ok {
+			t.Errorf("scan missed %s", id)
+		}
+	}
+}
+
+// IndexedUsers is built on the scan now, so it must still behave like a set
+// even though SSCAN is allowed to repeat members.
+func TestIndexedUsersReturnsEveryUserExactlyOnce(t *testing.T) {
+	ctx := context.Background()
+	_, store := newStore(t)
+	want := claimN(t, ctx, store, "gw-1", 120)
+
+	got, err := store.IndexedUsers(ctx)
+	if err != nil {
+		t.Fatalf("IndexedUsers: %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("IndexedUsers returned %d, want %d", len(got), len(want))
+	}
+	seen := make(map[string]struct{}, len(got))
+	for _, id := range got {
+		if _, dup := seen[id]; dup {
+			t.Fatalf("IndexedUsers returned %s twice", id)
+		}
+		seen[id] = struct{}{}
+	}
+}
+
+// The sweep must divide its Redis work. Batches is asserted rather than Pages
+// because SSCAN's COUNT is advisory — a server is free to return the whole set
+// in one page — while batch size is entirely the reaper's own decision.
+func TestReaperFlushesInBoundedBatches(t *testing.T) {
+	ctx := context.Background()
+	f := newReaperFixtureWithOptions(t, "gw-1", ReaperOptions{
+		BatchSize: 16,
+		ScanPage:  8,
+		Budget:    30 * time.Second,
+	})
+
+	if err := f.reg.Heartbeat(ctx, "gw-1", 0); err != nil {
+		t.Fatalf("Heartbeat: %v", err)
+	}
+	claimN(t, ctx, f.store, "gw-1", 100)
+
+	f.mr.FastForward(testSessionTTL + time.Second)
+	if err := f.reg.Heartbeat(ctx, "gw-1", 0); err != nil {
+		t.Fatalf("Heartbeat: %v", err)
+	}
+
+	res, err := f.reap.Sweep(ctx)
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if res.Expired != 100 {
+		t.Errorf("Expired: got %d, want 100", res.Expired)
+	}
+	if res.Truncated {
+		t.Error("sweep truncated with a 30s budget")
+	}
+	// 100 owned sessions at 16 per batch is 7 pipelines, never 1.
+	if res.Batches < 6 {
+		t.Errorf("Batches: got %d, want at least 6 — the sweep is not chunking", res.Batches)
+	}
+	if res.Pages < 1 {
+		t.Errorf("Pages: got %d, want at least 1", res.Pages)
+	}
+	if n, _ := f.store.SessionCount(ctx); n != 0 {
+		t.Errorf("session index after sweep: got %d, want 0", n)
+	}
+}
+
+// Chunking is a performance change and must not be a behavioural one. The same
+// tape of sessions swept one-at-a-time and all-at-once has to produce the same
+// result.
+func TestChunkedAndUnchunkedSweepsAgree(t *testing.T) {
+	ctx := context.Background()
+
+	run := func(batch int) SweepResult {
+		t.Helper()
+		f := newReaperFixtureWithOptions(t, "gw-1", ReaperOptions{
+			BatchSize: batch,
+			ScanPage:  7,
+			Budget:    30 * time.Second,
+		})
+		for _, id := range []string{"gw-1", "gw-dead"} {
+			if err := f.reg.Heartbeat(ctx, id, 0); err != nil {
+				t.Fatalf("Heartbeat(%s): %v", id, err)
+			}
+		}
+
+		// A mix of all three outcomes: healthy, expired, and orphaned by a
+		// gateway that goes away.
+		for i := 0; i < 40; i++ {
+			u := "orphan-" + strconv.Itoa(i)
+			if _, err := f.store.Claim(ctx, session(u, "s-"+u, "gw-dead", protocol.StatusOnline, 1000)); err != nil {
+				t.Fatalf("Claim(%s): %v", u, err)
+			}
+		}
+		f.mr.FastForward(7 * time.Second) // gw-dead falls out of the registry
+		if err := f.reg.Heartbeat(ctx, "gw-1", 0); err != nil {
+			t.Fatalf("Heartbeat: %v", err)
+		}
+		for i := 0; i < 40; i++ {
+			u := "healthy-" + strconv.Itoa(i)
+			if _, err := f.store.Claim(ctx, session(u, "s-"+u, "gw-1", protocol.StatusOnline, 2000)); err != nil {
+				t.Fatalf("Claim(%s): %v", u, err)
+			}
+		}
+
+		res, err := f.reap.Sweep(ctx)
+		if err != nil {
+			t.Fatalf("Sweep(batch=%d): %v", batch, err)
+		}
+		return res
+	}
+
+	one := run(1)
+	many := run(1000)
+
+	if one.Owned != many.Owned {
+		t.Errorf("Owned: batch=1 %d, batch=1000 %d", one.Owned, many.Owned)
+	}
+	if one.Expired != many.Expired {
+		t.Errorf("Expired: batch=1 %d, batch=1000 %d", one.Expired, many.Expired)
+	}
+	if one.Orphaned != many.Orphaned {
+		t.Errorf("Orphaned: batch=1 %d, batch=1000 %d", one.Orphaned, many.Orphaned)
+	}
+	if one.Skipped != many.Skipped {
+		t.Errorf("Skipped: batch=1 %d, batch=1000 %d", one.Skipped, many.Skipped)
+	}
+	if one.Orphaned == 0 {
+		t.Fatal("fixture produced no orphans; the test is not exercising the path")
+	}
+	// ...and they genuinely took different routes to the same answer.
+	if one.Batches <= many.Batches {
+		t.Errorf("batch=1 flushed %d pipelines, batch=1000 flushed %d — expected many more",
+			one.Batches, many.Batches)
+	}
+}
+
+// A sweep that cannot finish must stop, not run past its interval. Overlapping
+// sweeps repeat the same scan and compound the contention that made the sweep
+// slow to begin with.
+func TestReaperStopsAtItsBudgetInsteadOfOverrunning(t *testing.T) {
+	ctx := context.Background()
+	f := newReaperFixtureWithOptions(t, "gw-1", ReaperOptions{
+		BatchSize: 1,
+		ScanPage:  4,
+		Budget:    time.Nanosecond, // expires the moment the first batch lands
+	})
+
+	if err := f.reg.Heartbeat(ctx, "gw-1", 0); err != nil {
+		t.Fatalf("Heartbeat: %v", err)
+	}
+	claimN(t, ctx, f.store, "gw-1", 60)
+	f.mr.FastForward(testSessionTTL + time.Second)
+	if err := f.reg.Heartbeat(ctx, "gw-1", 0); err != nil {
+		t.Fatalf("Heartbeat: %v", err)
+	}
+
+	res, err := f.reap.Sweep(ctx)
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if !res.Truncated {
+		t.Fatal("sweep ran to completion despite a 1ns budget")
+	}
+	// Stopping early is not the same as doing nothing: whatever was in flight
+	// still completed, and the rest is next tick's problem.
+	if res.Expired == 0 {
+		t.Error("truncated sweep did no work at all")
+	}
+	if res.Expired >= 60 {
+		t.Errorf("truncated sweep reaped everything (%d); the budget did nothing", res.Expired)
+	}
+
+	// The remainder is still there and still reapable.
+	n, _ := f.store.SessionCount(ctx)
+	if n == 0 {
+		t.Error("truncated sweep emptied the index")
+	}
+}
+
+// A truncated sweep must leave the index in a state the next sweep finishes,
+// rather than wedging on the same prefix forever.
+func TestRepeatedTruncatedSweepsStillDrainTheIndex(t *testing.T) {
+	ctx := context.Background()
+	f := newReaperFixtureWithOptions(t, "gw-1", ReaperOptions{
+		BatchSize: 4,
+		ScanPage:  4,
+		Budget:    time.Nanosecond,
+	})
+
+	if err := f.reg.Heartbeat(ctx, "gw-1", 0); err != nil {
+		t.Fatalf("Heartbeat: %v", err)
+	}
+	claimN(t, ctx, f.store, "gw-1", 40)
+	f.mr.FastForward(testSessionTTL + time.Second)
+
+	for i := 0; i < 100; i++ {
+		if err := f.reg.Heartbeat(ctx, "gw-1", 0); err != nil {
+			t.Fatalf("Heartbeat: %v", err)
+		}
+		if _, err := f.reap.Sweep(ctx); err != nil {
+			t.Fatalf("Sweep %d: %v", i, err)
+		}
+		if n, _ := f.store.SessionCount(ctx); n == 0 {
+			return
+		}
+	}
+	n, _ := f.store.SessionCount(ctx)
+	t.Errorf("index still holds %d sessions after 100 budget-limited sweeps", n)
+}
+
+// Ownership filtering is what keeps N gateways from each reaping the same
+// session. Chunking walks the index in pages, so the filter now runs per page
+// rather than once — this is the test that it still runs at all.
+func TestChunkedSweepStillOnlyTouchesOwnedShards(t *testing.T) {
+	ctx := context.Background()
+	f := newReaperFixtureWithOptions(t, "gw-1", ReaperOptions{
+		BatchSize: 8,
+		ScanPage:  8,
+		Budget:    30 * time.Second,
+	})
+
+	for _, id := range []string{"gw-1", "gw-2", "gw-3"} {
+		if err := f.reg.Heartbeat(ctx, id, 0); err != nil {
+			t.Fatalf("Heartbeat(%s): %v", id, err)
+		}
+	}
+	ids := claimN(t, ctx, f.store, "gw-1", 300)
+	f.mr.FastForward(testSessionTTL + time.Second)
+	for _, id := range []string{"gw-1", "gw-2", "gw-3"} {
+		if err := f.reg.Heartbeat(ctx, id, 0); err != nil {
+			t.Fatalf("Heartbeat(%s): %v", id, err)
+		}
+	}
+
+	res, err := f.reap.Sweep(ctx)
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if res.Owned+res.Skipped != len(ids) {
+		t.Errorf("Owned+Skipped = %d, want %d — the walk did not see the whole index",
+			res.Owned+res.Skipped, len(ids))
+	}
+	if res.Skipped == 0 {
+		t.Fatal("gw-1 owned every shard; the ring is not distributing and the test proves nothing")
+	}
+	if res.Expired != res.Owned {
+		t.Errorf("Expired %d != Owned %d: the sweep acted on shards it does not own",
+			res.Expired, res.Owned)
+	}
+	// Exactly the unowned sessions survive.
+	if n, _ := f.store.SessionCount(ctx); int(n) != res.Skipped {
+		t.Errorf("index holds %d after sweep, want %d (the unowned ones)", n, res.Skipped)
 	}
 }
 

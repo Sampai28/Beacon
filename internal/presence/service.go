@@ -43,6 +43,10 @@ type Config struct {
 
 	// RingReplicas is virtual nodes per gateway on the ring.
 	RingReplicas int
+
+	// Reaper shapes the sweep: how much work goes into one Redis pipeline, how
+	// large an SSCAN page to ask for, and how long a single sweep may run.
+	Reaper ReaperOptions
 }
 
 // DefaultConfig returns timings tuned for a local Compose stack.
@@ -62,6 +66,15 @@ func DefaultConfig(gatewayID string) Config {
 		ReaperInterval:   2 * time.Second,
 		DriftInterval:    5 * time.Second,
 		RingReplicas:     ring.DefaultVirtualNodes,
+		Reaper: ReaperOptions{
+			BatchSize: defaultBatchSize,
+			ScanPage:  defaultScanPage,
+			// Deliberately below ReaperInterval. A sweep allowed to run for a
+			// full interval would finish exactly as the next one starts, and
+			// any jitter makes them overlap — which is the failure the budget
+			// exists to prevent, not one it should tolerate.
+			Budget: defaultBudget,
+		},
 	}
 }
 
@@ -82,12 +95,39 @@ type Service struct {
 	connections func() int64
 }
 
-// NewService wires the presence layer. The caller must call SetConnectionCounter
-// before Run, since the registry heartbeat publishes the count that the drift
-// reconciler depends on.
+// NewService wires the presence layer against a single Redis client, putting
+// background sweeps on the same connection pool as the request path. Prefer
+// NewServiceWithBackground.
 func NewService(
 	ctx context.Context,
 	rdb redis.UniversalClient,
+	cfg Config,
+	m *metrics.Metrics,
+	log *slog.Logger,
+) *Service {
+	return NewServiceWithBackground(ctx, rdb, rdb, cfg, m, log)
+}
+
+// NewServiceWithBackground wires the presence layer with the reaper and the
+// drift reconciler on their own Redis client.
+//
+// Chunking the sweep shortens each burst but does not separate the two classes
+// of work: a batch in flight still holds a connection from whatever pool it was
+// given, and under load the request path can find every connection busy with
+// cleanup. Handing background loops their own client makes that impossible
+// rather than unlikely — a slow sweep can exhaust its own small pool and the
+// only thing that waits is the next batch.
+//
+// bgRdb may be the same client as rdb, which is what NewService does and what
+// the tests use; the separation is a deployment decision, not a correctness
+// one.
+//
+// The caller must call SetConnectionCounter before Run, since the registry
+// heartbeat publishes the count the drift reconciler depends on.
+func NewServiceWithBackground(
+	ctx context.Context,
+	rdb redis.UniversalClient,
+	bgRdb redis.UniversalClient,
 	cfg Config,
 	m *metrics.Metrics,
 	log *slog.Logger,
@@ -97,16 +137,23 @@ func NewService(
 	bus := NewBus(ctx, rdb, cfg.GatewayID, m, log)
 	r := ring.New(cfg.RingReplicas)
 
+	// Background views over the same keyspace, differing only in which pool
+	// their commands come from.
+	bgStore := NewStore(bgRdb, cfg.SessionTTL)
+	bgRegistry := NewRegistry(bgRdb, cfg.NodeTTL)
+
 	return &Service{
-		cfg:         cfg,
-		log:         log,
-		m:           m,
-		Store:       store,
-		Registry:    registry,
-		Bus:         bus,
-		Ring:        r,
-		Reaper:      NewReaper(store, registry, bus, r, cfg.GatewayID, m, log),
-		Reconciler:  NewReconciler(store, registry, m, log),
+		cfg:      cfg,
+		log:      log,
+		m:        m,
+		Store:    store,
+		Registry: registry,
+		Bus:      bus,
+		Ring:     r,
+		Reaper: NewReaperWithOptions(
+			bgStore, bgRegistry, bus, r, cfg.GatewayID, m, log, cfg.Reaper,
+		),
+		Reconciler:  NewReconciler(bgStore, bgRegistry, m, log),
 		connections: func() int64 { return 0 },
 	}
 }

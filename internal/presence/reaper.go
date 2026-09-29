@@ -24,6 +24,22 @@ import (
 //
 // Both are handled by the ring-designated owner of the user's shard, so the work
 // happens once per sweep across the cluster rather than once per gateway.
+//
+// # Why the sweep is chunked
+//
+// The first version read the whole session index with SMEMBERS and then queued
+// one HMGET per owned session into a single pipeline. That is one enormous
+// burst: at 40,000 sessions across three gateways it is roughly 13,000 commands
+// arriving at Redis back to back, on connections taken from the same pool the
+// request path uses. Redis is single-threaded, so a JOIN lookup issued during
+// that burst waits behind every command still queued ahead of it. Measured, the
+// sweep's p99 crossed its own 2 s interval somewhere between 20,000 and 30,000
+// connections, and JOIN p99 went from 38 ms to 1.3 s with it.
+//
+// Nothing about that is Redis being slow. It is one client deciding to use the
+// whole server at once. So the sweep now walks the index with SSCAN and flushes
+// work in bounded batches, yielding between them, and a sweep that cannot
+// finish inside its budget stops rather than overlapping the next tick.
 type Reaper struct {
 	store     *Store
 	registry  *Registry
@@ -32,6 +48,49 @@ type Reaper struct {
 	gatewayID string
 	m         *metrics.Metrics
 	log       *slog.Logger
+
+	batchSize int
+	scanPage  int64
+	budget    time.Duration
+}
+
+// ReaperOptions tunes the sweep's shape. Zero values take the defaults, which
+// are what the shipped configuration uses.
+type ReaperOptions struct {
+	// BatchSize is how many HMGETs go into one pipeline. The tradeoff is
+	// round trips against how long a single burst occupies Redis; 256 is
+	// roughly 20x fewer round trips than issuing commands singly while still
+	// leaving gaps a JOIN can land in.
+	BatchSize int
+
+	// ScanPage is the SSCAN COUNT hint.
+	ScanPage int64
+
+	// Budget bounds one sweep. Exceeding it stops the sweep early and counts
+	// it, which is strictly better than running past the interval: overlapping
+	// sweeps do the same work twice and compound the contention that made the
+	// sweep slow in the first place. Whatever is left is picked up next tick,
+	// because SSCAN restarts from the beginning and the index is shuffled by
+	// then anyway.
+	Budget time.Duration
+}
+
+const (
+	defaultBatchSize = 256
+	defaultBudget    = 1500 * time.Millisecond
+)
+
+func (o ReaperOptions) withDefaults() ReaperOptions {
+	if o.BatchSize <= 0 {
+		o.BatchSize = defaultBatchSize
+	}
+	if o.ScanPage <= 0 {
+		o.ScanPage = defaultScanPage
+	}
+	if o.Budget <= 0 {
+		o.Budget = defaultBudget
+	}
+	return o
 }
 
 func NewReaper(
@@ -43,9 +102,26 @@ func NewReaper(
 	m *metrics.Metrics,
 	log *slog.Logger,
 ) *Reaper {
+	return NewReaperWithOptions(store, registry, bus, r, gatewayID, m, log, ReaperOptions{})
+}
+
+func NewReaperWithOptions(
+	store *Store,
+	registry *Registry,
+	bus *Bus,
+	r *ring.Ring,
+	gatewayID string,
+	m *metrics.Metrics,
+	log *slog.Logger,
+	opts ReaperOptions,
+) *Reaper {
+	opts = opts.withDefaults()
 	return &Reaper{
 		store: store, registry: registry, bus: bus, ring: r,
 		gatewayID: gatewayID, m: m, log: log,
+		batchSize: opts.BatchSize,
+		scanPage:  opts.ScanPage,
+		budget:    opts.Budget,
 	}
 }
 
@@ -56,6 +132,16 @@ type SweepResult struct {
 	Expired  int
 	Orphaned int
 	Skipped  int
+
+	// Pages is SSCAN round trips, Batches is HMGET pipelines flushed. Both are
+	// reported so a test can assert the sweep actually chunked rather than
+	// quietly falling back to one giant batch.
+	Pages   int
+	Batches int
+
+	// Truncated means the budget ran out before the index was fully walked.
+	// The counts above then describe a partial pass.
+	Truncated bool
 }
 
 // Sweep runs one reaping pass.
@@ -100,45 +186,151 @@ func (r *Reaper) Sweep(ctx context.Context) (SweepResult, error) {
 		return res, nil
 	}
 
-	userIDs, err := r.store.IndexedUsers(ctx)
+	deadline := start.Add(r.budget)
+
+	// Phase 1: walk the index and decide what this gateway is responsible for.
+	// Phase 2: act on it.
+	//
+	// The two phases are separate because reaping *removes members from the
+	// very set being scanned* — ForgetUser and Delete both SREM from it. SSCAN
+	// only promises to return members that are present for the whole
+	// iteration; deleting as you walk can make the cursor skip members it has
+	// not reached yet. Interleaving the two silently under-reaped by roughly a
+	// quarter in testing, which is the worst kind of bug here: the sweep
+	// reports success, drift stays non-zero, and nothing points at the reaper.
+	//
+	// Collecting first costs one slice of owned ids, which is a fraction of
+	// the index and lives for one sweep. What this rewrite had to stop
+	// materialising was the Redis command burst, not a Go slice.
+	owned, err := r.collect(ctx, deadline, &res)
 	if err != nil {
-		r.m.RedisErrors.WithLabelValues("indexed_users").Inc()
 		return res, err
 	}
+	r.m.ReaperOwnedKeys.Set(float64(res.Owned))
 
-	owned := make([]string, 0, len(userIDs))
-	for _, id := range userIDs {
-		if r.ring.Owns(id, r.gatewayID) {
-			owned = append(owned, id)
-		} else {
-			res.Skipped++
+	for i := 0; i < len(owned); i += r.batchSize {
+		end := i + r.batchSize
+		if end > len(owned) {
+			end = len(owned)
+		}
+		if err := r.flush(ctx, owned[i:end], liveSet, &res); err != nil {
+			return res, err
+		}
+		if end < len(owned) && r.outOfTime(ctx, deadline) {
+			res.Truncated = true
+			break
 		}
 	}
-	res.Owned = len(owned)
-	r.m.ReaperOwnedKeys.Set(float64(len(owned)))
 
-	if len(owned) == 0 {
-		return res, nil
+	// Reported once, here, rather than at each place the budget can run out:
+	// a sweep truncated during the walk and again during the flush is still
+	// one truncated sweep, and counting it twice would overstate how often
+	// cleanup is falling behind.
+	if res.Truncated {
+		r.reportTruncated(res)
 	}
+	return res, nil
+}
 
-	// One pipelined HMGET per owned user rather than HGETALL: the sweep only
-	// needs three fields, and at load-test connection counts the difference in
-	// bytes moved is the difference between a sweep that keeps up and one that
-	// does not.
+// collect walks the session index and returns the user ids this gateway owns.
+//
+// It performs no writes, which is what makes the SSCAN cursor trustworthy.
+func (r *Reaper) collect(ctx context.Context, deadline time.Time, res *SweepResult) ([]string, error) {
+	// SSCAN may also return the same member twice when the set is rehashed
+	// mid-walk. Acting on a duplicate is not harmless: SREM on an absent
+	// member succeeds, so the same expired session would increment
+	// sessions_reaped_total twice and publish a second OFFLINE for a user who
+	// is already offline, which subscribers would see as a real transition.
+	seen := make(map[string]struct{}, r.batchSize)
+	owned := make([]string, 0, r.batchSize)
+
+	var cursor uint64
+	for {
+		page, next, err := r.store.ScanIndexedUsers(ctx, cursor, r.scanPage)
+		if err != nil {
+			r.m.RedisErrors.WithLabelValues("indexed_users").Inc()
+			return nil, err
+		}
+		res.Pages++
+		r.m.ReaperScanPages.Inc()
+
+		for _, id := range page {
+			if !r.ring.Owns(id, r.gatewayID) {
+				res.Skipped++
+				continue
+			}
+			if _, dup := seen[id]; dup {
+				continue
+			}
+			seen[id] = struct{}{}
+			owned = append(owned, id)
+		}
+		res.Owned = len(owned)
+
+		if next == 0 {
+			return owned, nil
+		}
+		cursor = next
+
+		// An index made almost entirely of shards this gateway does not own
+		// still costs a scan per page, so a sweep can run long on the walk
+		// alone and the budget has to apply here too.
+		if r.outOfTime(ctx, deadline) {
+			res.Truncated = true
+			return owned, nil
+		}
+	}
+}
+
+// outOfTime reports whether the sweep should stop now.
+func (r *Reaper) outOfTime(ctx context.Context, deadline time.Time) bool {
+	if ctx.Err() != nil {
+		return true
+	}
+	return !time.Now().Before(deadline)
+}
+
+func (r *Reaper) reportTruncated(res SweepResult) {
+	r.m.ReaperSweepsTruncated.Inc()
+	r.m.ReaperOwnedKeys.Set(float64(res.Owned))
+	r.log.Warn("reaper sweep hit its budget and stopped early",
+		"budget", r.budget,
+		"pages", res.Pages,
+		"batches", res.Batches,
+		"owned_seen", res.Owned,
+		"expired", res.Expired,
+		"orphaned", res.Orphaned)
+}
+
+// flush reads one batch of sessions and acts on whatever is wrong with them.
+//
+// One pipelined HMGET per user rather than HGETALL: the sweep needs three
+// fields, and at these connection counts the bytes not moved are the difference
+// between a sweep that keeps up and one that does not.
+func (r *Reaper) flush(ctx context.Context, ids []string, liveSet map[string]struct{}, res *SweepResult) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	res.Batches++
+	r.m.ReaperBatches.Inc()
+
 	pipe := r.store.rdb.Pipeline()
-	cmds := make([]*redis.SliceCmd, len(owned))
-	for i, id := range owned {
+	cmds := make([]*redis.SliceCmd, len(ids))
+	for i, id := range ids {
 		cmds[i] = pipe.HMGet(ctx, SessionKey(id), "sessionId", "gatewayId", "lastSeen")
 	}
 	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
 		r.m.RedisErrors.WithLabelValues("reaper_scan").Inc()
-		return res, err
+		return err
 	}
 
 	now := NowMillis()
-	for i, id := range owned {
+	for i, id := range ids {
 		vals, err := cmds[i].Result()
 		if err != nil && err != redis.Nil {
+			continue
+		}
+		if len(vals) < 2 {
 			continue
 		}
 
@@ -177,8 +369,7 @@ func (r *Reaper) Sweep(ctx context.Context) (SweepResult, error) {
 				"user_id", id, "dead_gateway", gatewayID)
 		}
 	}
-
-	return res, nil
+	return nil
 }
 
 // publishOffline announces a reaped session. Failure is counted but not

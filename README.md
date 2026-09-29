@@ -161,6 +161,11 @@ go test -tags=integration -count=1 -v ./test/...
 | `BEACON_NODE_TTL` | `6s` | Ring membership lifetime without a registry heartbeat |
 | `BEACON_REAPER_INTERVAL` | `2s` | Sweep cadence |
 | `BEACON_DRIFT_INTERVAL` | `1s` | Reconciliation cadence |
+| `BEACON_REAPER_BATCH` | `256` | `HMGET`s per pipeline. Larger means fewer round trips and longer bursts. |
+| `BEACON_REAPER_SCAN_PAGE` | `512` | `SSCAN` `COUNT` hint while walking the session index |
+| `BEACON_REAPER_BUDGET` | `1500ms` | A sweep exceeding this stops instead of overlapping the next tick. Keep it below `BEACON_REAPER_INTERVAL`. |
+| `BEACON_REDIS_POOL` | `64` | Connection pool for the request path |
+| `BEACON_REDIS_BG_POOL` | `8` | Separate pool for the reaper and reconciler, so cleanup cannot starve JOIN |
 
 ## HTTP surface
 
@@ -188,22 +193,50 @@ containers and the k6 load generator share that budget.
 ### Connection ceiling
 
 The 10,000 target was met on the first run, so the ramp continued until it broke.
+That first ceiling was the reaper's fault, and the second set of runs is after
+fixing it — same machine, same script, same parameters, chunked sweep on its own
+Redis connection pool.
 
-| Connections | Connect success | Connect p99 | JOIN p95 | JOIN p99 | JOINs answered | Verdict |
-|---:|---:|---:|---:|---:|---:|---|
-| 10,000 | 100% | 44 ms | 18 ms | 27 ms | 100% (204,850) | clean |
-| 20,000 | 100% | 59 ms | 18 ms | 38 ms | 100% (469,215) | clean, all thresholds passed |
-| 30,000 | 100% | 227 ms | 195 ms | 1,323 ms | 100% (784,130) | latency threshold missed |
-| 40,000 | 100% | 4,429 ms | 4,498 ms | 4,894 ms | 97.2% (900,641 / 926,347) | broken, 43 socket errors |
+| Connections | Connect p99 | JOIN p95 | JOIN p99 | JOINs answered | Verdict |
+|---:|---:|---:|---:|---:|---|
+| 10,000 | 44 ms | 18 ms | 27 ms | 100% (204,850) | clean |
+| 20,000 | 59 ms | 18 ms | 38 ms | 100% (469,215) | clean |
+| 30,000 | 227 ms | 195 ms | 1,323 ms | 100% (784,130) | latency threshold missed |
+| 40,000 | 4,429 ms | 4,498 ms | 4,894 ms | 97.2% (900,641 / 926,347) | broken, 43 socket errors |
 
-20,000 concurrent connections is the highest fully clean result. Gateway-side
-counters agree with the client figures: at 10,000 the three replicas reported
-3,600 / 3,200 / 3,200 active connections.
+**After chunking the sweep** ([`perf/chunked-reaper`](#perfchunked-reaper--chunked-sweep-and-a-dedicated-redis-pool)):
+
+| Connections | Connect p99 | JOIN p95 | JOIN p99 | JOINs answered | Verdict |
+|---:|---:|---:|---:|---:|---|
+| 20,000 | 37 ms | 5 ms | 9 ms | 100% (469,504) | clean |
+| 30,000 | 69 ms | 63 ms | 75 ms | 100% (794,185) | clean, all thresholds passed |
+| 40,000 | 49 ms | 42 ms | 53 ms | 100% (1,178,401) | clean, no socket errors |
+| 50,000 | 144 ms | 79 ms | 230 ms | 100% (1,621,767) | clean, all thresholds passed |
+
+The highest fully clean result moved from **20,000 to at least 50,000**. The
+ceiling was not found: 50,000 still passes every threshold, and past that the
+single k6 container holding the sockets starts competing for the same 15.3 GB,
+so a failure there would describe the load generator rather than Beacon.
+
+At matched load the difference is the whole point of the change:
+
+| | 30,000 before | 30,000 after | 40,000 before | 40,000 after |
+|---|---:|---:|---:|---:|
+| JOIN p99 | 1,323 ms | **75 ms** | 4,894 ms | **53 ms** |
+| JOIN p95 | 195 ms | **63 ms** | 4,498 ms | **42 ms** |
+| JOIN max | 4,072 ms | **125 ms** | 6,361 ms | **139 ms** |
+| Connect p99 | 227 ms | **69 ms** | 4,429 ms | **49 ms** |
+| JOINs answered | 100% | 100% | 97.2% | **100%** |
+
+Reproduce the comparison from the committed raw output with
+`python3 bench/compare.py 40000 40000-chunked`.
 
 Every JOIN here is a cross-node resolution. The load script pairs each client
 with a peer on a different gateway, so there is no local-lookup fast path.
+Gateway-side counters agree with the client figures: at 10,000 the three replicas
+reported 3,600 / 3,200 / 3,200 active connections.
 
-### What limits it
+### What limited it
 
 The usual suspects were ruled out from the gateways' own process metrics at peak.
 
@@ -215,14 +248,20 @@ The usual suspects were ruled out from the gateways' own process metrics at peak
 | Ephemeral ports | — | per-container namespace | No |
 | Reaper sweep p99 | ≥ 5 s | 2 s interval | **Yes** |
 
-The reaper issues one pipelined `HMGET` per session it owns. At 40,000 sessions
-that is roughly 13,000 commands in a single burst per gateway, which saturates
-the Redis connection pool and starves the lookups a JOIN needs. JOIN latency
-degrades as sweep duration crosses the sweep interval, at which point sweeps also
-overlap and cleanup falls behind.
+The reaper read the whole session index with `SMEMBERS` and then issued one
+pipelined `HMGET` per session it owned. At 40,000 sessions that is roughly 13,000
+commands in a single burst per gateway. Redis is single-threaded, so a JOIN
+lookup issued during that burst waits behind every command still queued ahead of
+it — and both came from the same connection pool. JOIN latency tracked sweep
+duration almost exactly, and once a sweep outlasted its own 2 s interval, sweeps
+overlapped and cleanup fell behind as well.
 
-This is a Beacon limit, not a host limit, and it is fixable by chunking the sweep
-or giving the reaper its own connection pool. Neither is done here.
+Nothing there was Redis being slow. It was one client deciding to use the whole
+server at once.
+
+After the fix, across 1,995 sweeps on three gateways spanning all four load
+levels, 11 hit the time budget and stopped early rather than overrunning; on
+gateway-1, 647 of 664 sweeps finished within one second.
 
 ### Killing a gateway under load
 
@@ -300,9 +339,13 @@ is authoritative, and divergence between them is reported via
 
 ## Known limitations
 
-- **The reaper sweep is unchunked** and caps throughput. Sweep p99 crosses the
-  2 s interval somewhere between 20,000 and 30,000 connections, and JOIN latency
-  degrades with it.
+- **The connection ceiling is unknown.** 50,000 is clean and the reaper is no
+  longer what binds; finding the real limit needs a load generator that is not
+  sharing a 15.3 GB budget with the service under test.
+- **A sweep can still exceed its budget by one batch.** The deadline is checked
+  between batches, so a sweep whose final batch is slow finishes late rather
+  than being interrupted. Bounding it harder would mean abandoning work already
+  paid for.
 - **Redis is a single point of failure.** Losing it does not drop existing
   connections, but no presence propagates and no JOIN resolves.
 - **Pub/sub is at-most-once.** A subscriber disconnected at the instant of a
@@ -401,6 +444,44 @@ reporting zero connections instead of an error.
 
 *Verified:* four load runs and one chaos run, raw output committed. Headline
 numbers are in [Benchmark results](#benchmark-results).
+
+### `perf/chunked-reaper` — chunked sweep and a dedicated Redis pool
+
+The `bench` branch left the throughput ceiling diagnosed but not fixed: the
+reaper read the whole index with `SMEMBERS` and fired one pipelined `HMGET` per
+owned session, ~13,000 commands in a single burst, from the same connection pool
+serving JOIN. This branch does both of the fixes that entry proposed, because
+they solve different halves of the problem. Chunking shortens each burst; only a
+separate pool makes it structurally impossible for cleanup to hold the
+connections clients are waiting on. The sweep now walks the index with `SSCAN`,
+flushes `HMGET` in batches of 256, and stops at a 1.5 s budget rather than
+overlapping the next tick.
+
+The interesting bug was one this change introduced and its own tests caught.
+Reaping *removes members from the very set being scanned* — both `ForgetUser`
+and `Delete` `SREM` from it — and `SSCAN` only promises to return members
+present for the whole iteration. Deleting while walking made the cursor skip
+entries it had not reached yet, and the first chunked implementation silently
+under-reaped by about a quarter: 228 of 300 sessions on a three-gateway ring.
+That is the worst shape a bug can have here. The sweep reports success, drift
+stays non-zero, and nothing points at the reaper. The fix is to separate the two
+phases — walk the index and decide, then act — so the cursor is never
+invalidated by the reaper's own writes. `SSCAN` may also return a member twice,
+which matters because `SREM` on an absent member succeeds: without a per-sweep
+dedup the same expired session would increment `sessions_reaped_total` twice and
+publish a second OFFLINE that subscribers would see as a real transition.
+
+Three metrics were added so the sweep's shape is visible from outside the
+process: `reaper_batches_total`, `reaper_scan_pages_total` and
+`reaper_sweeps_truncated_total`. The last one is the important one — it makes
+"cleanup is falling behind" an explicit signal, where previously that state
+arrived silently as sweeps ran past their own interval.
+
+*Verified:* `go test ./...` and `-race` clean, cross-node integration tests
+against a live three-replica stack, and four load runs at 20,000 / 30,000 /
+40,000 / 50,000 with raw output committed beside the originals. JOIN p99 at
+40,000 went 4,894 ms to 53 ms, and the highest clean result moved from 20,000 to
+at least 50,000.
 
 ## License
 

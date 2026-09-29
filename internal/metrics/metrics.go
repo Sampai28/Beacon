@@ -81,6 +81,17 @@ type Metrics struct {
 	ReaperDuration  prometheus.Histogram
 	ReaperOwnedKeys prometheus.Gauge
 
+	// The sweep walks the index with SSCAN and flushes work in bounded
+	// batches. These three are how you tell, from outside the process, that it
+	// is actually doing that: pages and batches should both climb with session
+	// count, and truncations should stay at zero. A rising truncation rate is
+	// the signal that the sweep can no longer keep up within its budget —
+	// which is the condition the unchunked version used to enter silently, by
+	// running past its own interval until sweeps overlapped.
+	ReaperScanPages       prometheus.Counter
+	ReaperBatches         prometheus.Counter
+	ReaperSweepsTruncated prometheus.Counter
+
 	// --- Integrity check 5: orphan detection --------------------------------
 
 	OrphanSessionsReclaimed prometheus.Counter
@@ -227,6 +238,21 @@ func New(reg prometheus.Registerer, gatewayID string) *Metrics {
 			Namespace: Namespace,
 			Name:      "reaper_owned_sessions",
 			Help:      "Sessions this gateway owns for reaping under the current ring.",
+		}),
+		ReaperScanPages: r.NewCounter(prometheus.CounterOpts{
+			Namespace: Namespace,
+			Name:      "reaper_scan_pages_total",
+			Help:      "SSCAN pages read while walking the session index.",
+		}),
+		ReaperBatches: r.NewCounter(prometheus.CounterOpts{
+			Namespace: Namespace,
+			Name:      "reaper_batches_total",
+			Help:      "Bounded HMGET pipelines the reaper flushed.",
+		}),
+		ReaperSweepsTruncated: r.NewCounter(prometheus.CounterOpts{
+			Namespace: Namespace,
+			Name:      "reaper_sweeps_truncated_total",
+			Help:      "Sweeps that hit their time budget and stopped before walking the whole index. Sustained non-zero means cleanup is falling behind.",
 		}),
 
 		OrphanSessionsReclaimed: r.NewCounter(prometheus.CounterOpts{
